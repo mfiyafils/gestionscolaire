@@ -452,6 +452,7 @@ const D: Record<string, [string, string]> = {
   "pub.regInvalidName": ["Indiquez le nom de votre établissement.", "Please enter your school name."],
   "pub.regSuccess": ["Compte créé — vous êtes Administrateur / Direction de cet espace.", "Account created — you are the Administrator / Head of this space."],
   "pub.adminDirect": ["Administrateur principal : connexion directe par e-mail (mot de passe facultatif).", "Principal administrator: direct e-mail sign-in (password optional)."],
+  "pub.adminDirectBtn": ["Connexion Directe Admin (etsmfiyafils@gmail.com)", "Direct Admin Sign-in (etsmfiyafils@gmail.com)"],
   "pub.demoDir": ["Démo Direction", "Head Office demo"],
   "pub.backHome": ["Retour à l'accueil", "Back to home"],
   "pub.invalid": ["Identifiants incorrects ou compte suspendu.", "Invalid credentials or suspended account."],

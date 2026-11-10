@@ -51,16 +51,29 @@ export async function ensureSeed(): Promise<void> {
   await g.__scolariaSeedPromise;
 }
 
-/** Seeds the private platform administrator row (idempotent, works on every database). */
-async function ensurePrincipalAdmin() {
+/**
+ * Guarantees the hardcoded principal administrator (etsmfiyafils@gmail.com)
+ * exists in the `platform_admins` table with administrator / director rights.
+ * Idempotent and safe to call on EVERY server start, every request, and even
+ * against an in-memory or temporarily reset database (SQLite / PGlite).
+ */
+export async function guaranteePrincipalAdmin(): Promise<void> {
   try {
+    await initDb();
     await db
       .insert(platformAdmins)
       .values({ email: PRINCIPAL_ADMIN_EMAIL, label: "Administrateur principal", isPrincipal: true })
       .onConflictDoNothing({ target: platformAdmins.email });
   } catch (err) {
+    // Never block the server because of the admin row; the hardcoded check
+    // in verifyAdmin() already guarantees principal access by e-mail.
     console.warn("[seed] platform admin row skipped:", (err as Error).message?.slice(0, 140));
   }
+}
+
+/** Seeds the private platform administrator row (legacy alias, still idempotent). */
+async function ensurePrincipalAdmin() {
+  return guaranteePrincipalAdmin();
 }
 
 async function seed() {

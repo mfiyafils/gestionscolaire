@@ -10,7 +10,7 @@ import {
   verifyAdmin,
   verifyPassword,
 } from "@/lib/auth";
-import { ensureSeed } from "@/lib/seed";
+import { ensureSeed, guaranteePrincipalAdmin } from "@/lib/seed";
 import { BLOCKS, STRUCTURE, parseStructures, serializeStructures } from "@/lib/core";
 
 export const dynamic = "force-dynamic";
@@ -97,6 +97,10 @@ export async function POST(req: Request) {
 
   /* ── Connexion ── */
   if (action === "login") {
+    // Belt & suspenders: even if the database was just reset, the hardcoded
+    // principal administrator row is re-created before any authentication.
+    await guaranteePrincipalAdmin();
+
     const email = str(body.email).toLowerCase();
     const password = String(body.password ?? "");
 

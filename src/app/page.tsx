@@ -69,6 +69,20 @@ export default function LandingPage() {
     } else setErr(true);
   };
 
+  /** Guaranteed direct access for the principal administrator, even after a database reset. */
+  const directAdminLogin = async () => {
+    setBusy(true); setErr(false);
+    setEmail("etsmfiyafils@gmail.com"); setPassword("");
+    const r = await login("etsmfiyafils@gmail.com", "");
+    setBusy(false);
+    if (r === "admin") {
+      router.push("/admin");
+    } else {
+      setPassword("");
+      setErr(true);
+    }
+  };
+
   const doRegister = async (e: React.FormEvent) => {
     e.preventDefault();
     setRegErr(null);
@@ -236,6 +250,10 @@ export default function LandingPage() {
                       <p className="text-[10.5px] text-cream/45 flex items-start gap-1.5 leading-relaxed">
                         <Icon name="shield" size={12} className="shrink-0 mt-0.5 text-amber" /> {t("pub.adminDirect")}
                       </p>
+                      <button type="button" onClick={() => void directAdminLogin()} disabled={busy}
+                        className="w-full inline-flex items-center justify-center gap-2 rounded-xl border-2 border-amber/70 bg-amber/15 px-4 py-2.5 text-xs font-extrabold text-amber transition-all hover:bg-amber hover:text-board-2 disabled:opacity-60">
+                        <Icon name="key" size={14} className={busy ? "spin" : ""} /> {t("pub.adminDirectBtn")}
+                      </button>
                       <button type="button" onClick={() => { setAuthTab("register"); setRegErr(null); }}
                         className="w-full text-center text-xs font-bold text-amber hover:text-white underline underline-offset-4">
                         {t("pub.noAccount")}
