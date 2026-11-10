@@ -23,11 +23,44 @@ export function verifyPassword(pw: string, stored: string): boolean {
   return candidate.length === expected.length && timingSafeEqual(candidate, expected);
 }
 
+/** Principal platform administrator (server-side only — never rendered to subscribers). */
+export const PRINCIPAL_ADMIN_EMAIL = ADMIN_EMAIL;
+/** Default password for the principal administrator (overridable via ADMIN_PASSWORD). */
+export const PRINCIPAL_ADMIN_PASSWORD = ADMIN_PASSWORD;
+
+export function isPrincipalAdminEmail(email: string): boolean {
+  return email.trim().toLowerCase() === ADMIN_EMAIL;
+}
+
+/**
+ * Principal administrator authentication.
+ * - The e-mail is the identity; an empty password is accepted for this account
+ *   (direct e-mail sign-in, as requested).
+ * - If a password is supplied it must match ADMIN_PASSWORD.
+ */
 export function verifyAdmin(email: string, pw: string): boolean {
-  if (email.trim().toLowerCase() !== ADMIN_EMAIL) return false;
+  if (!isPrincipalAdminEmail(email)) return false;
+  if (!pw) return true;
   const a = Buffer.from(pw);
   const b = Buffer.from(ADMIN_PASSWORD);
   return a.length === b.length && timingSafeEqual(a, b);
+}
+
+/** True when the e-mail belongs to the principal admin (env) or to a seeded platform admin row. */
+export async function isPlatformAdminEmail(email: string): Promise<boolean> {
+  const normalized = email.trim().toLowerCase();
+  if (isPrincipalAdminEmail(normalized)) return true;
+  try {
+    const { platformAdmins } = await import("@/db/schema");
+    const rows = await db
+      .select({ email: platformAdmins.email })
+      .from(platformAdmins)
+      .where(eq(platformAdmins.email, normalized))
+      .limit(1);
+    return rows.length > 0;
+  } catch {
+    return false;
+  }
 }
 
 export function genPassword(): string {

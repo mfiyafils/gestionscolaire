@@ -1,29 +1,52 @@
+# ══════════════════════════════════════════════════════════════════════
+# Scolaria — Render Blueprint (Web Service Node.js)
+# Déploiement depuis un dépôt Git (GitHub/GitLab) : New → Blueprint → ce fichier.
+# Aucune variable n'est obligatoire : sans DATABASE_URL l'application
+# démarre sur sa base embarquée PGlite (le build ne peut pas échouer).
+# ══════════════════════════════════════════════════════════════════════
 services:
   - type: web
     name: scolaria
     runtime: node
     plan: free
-    buildCommand: npm install && npm run build
-    startCommand: npm start
+    region: frankfurt
+    branch: main
+    autoDeploy: true
+    buildCommand: npm ci --include=dev && npm run build
+    startCommand: npm run start
     healthCheckPath: /api/health
-    disk:
-      name: scolaria-disk
-      mountPath: /var/lib/scolaria
-      sizeGB: 1
     envVars:
       - key: NODE_VERSION
-        value: "20"
+        value: 22.11.0
+      - key: NODE_ENV
+        value: production
       - key: NEXT_TELEMETRY_DISABLED
         value: "1"
-      # Render PostgreSQL: create a database in the dashboard, then paste its
-      # Internal Database URL here (render.yaml keeps this as a sane default
-      # so the build NEVER fails when the variable is not wired yet).
+      # Base PostgreSQL gérée (optionnelle).
+      # → Renseignez cette variable dans le dashboard Render (Internal Database URL)
+      #   en pointant sur le service "scolaria-db" ci-dessous, ou sur Neon/Supabase.
+      # → Si elle reste vide, l'application utilise automatiquement PGlite (fallback) :
+      #   aucune erreur de build ni de démarrage.
       - key: DATABASE_URL
         sync: false
-      - key: DATABASE_SSL
-        value: "require"
-      # Super Admin credentials (read ONLY server-side; never exposed in HTML/JS)
+      # Compte Super Admin (privé, jamais exposé aux abonnés).
+      - key: ADMIN_EMAIL
+        value: etsmfiyafils@gmail.com
       - key: ADMIN_PASSWORD
         sync: false
+      # Optionnel : clé OpenAI pour enrichir l'Agent IA de code.
       - key: OPENAI_API_KEY
         sync: false
+
+# ── PostgreSQL managé (décommentez pour l'activer) ─────────────────────
+# databases:
+#   - name: scolaria-db
+#     plan: free
+#     databaseName: scolaria
+#     user: scolaria
+#     region: frankfurt
+# Puis dans le service web :
+#   - key: DATABASE_URL
+#     fromDatabase:
+#       name: scolaria-db
+#       property: connectionString

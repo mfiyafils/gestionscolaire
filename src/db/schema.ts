@@ -145,6 +145,14 @@ export const grades = pgTable(
   (t) => [unique("grades_student_subject_term").on(t.studentId, t.subjectId, t.term)]
 );
 
+/* ── Comptes administrateurs plateforme (privés) ──────────── */
+export const platformAdmins = pgTable("platform_admins", {
+  email: text("email").primaryKey(),
+  label: text("label").notNull().default("Principal"),
+  isPrincipal: boolean("is_principal").notNull().default(true),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+});
+
 /* ── Plateforme (Super Admin) ──────────────────────────────── */
 export const updates = pgTable("updates", {
   id: uuid("id").defaultRandom().primaryKey(),

@@ -1,9 +1,15 @@
 import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
-  /* Render friendliness: routes are force-dynamic; the build never touches the
-     database, so deploys succeed even before DATABASE_URL is wired. */
-  reactStrictMode: false,
+  // Keep native / WASM database drivers outside the bundler so both
+  // PostgreSQL (pg) and the embedded fallback (PGlite) work at runtime on Render.
+  serverExternalPackages: ["pg", "@electric-sql/pglite"],
+  poweredByHeader: false,
+  reactStrictMode: true,
+  // Production hardening for hosted environments (Render / Vercel / Netlify)
+  experimental: {
+    serverActions: { bodySizeLimit: "4mb" },
+  },
 };
 
 export default nextConfig;

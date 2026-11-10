@@ -23,6 +23,7 @@ interface AppCtx {
   refresh: (silent?: boolean) => Promise<void>;
   act: (action: string, payload?: Record<string, unknown>) => Promise<{ ok: boolean; result?: Record<string, unknown>; error?: string }>;
   login: (email: string, password: string) => Promise<"tenant" | "admin" | null>;
+  register: (input: { name: string; email: string; password: string; phone?: string }) => Promise<{ ok: boolean; error?: string }>;
   logout: () => Promise<void>;
 }
 
@@ -188,6 +189,24 @@ export function AppProvider({ children }: { children: ReactNode }) {
     return null;
   }, [load]);
 
+  const register = useCallback(async (input: { name: string; email: string; password: string; phone?: string }) => {
+    try {
+      const res = await fetch("/api/auth", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "register", ...input }),
+      });
+      const json = await res.json();
+      if (json.ok) {
+        await load();
+        return { ok: true };
+      }
+      return { ok: false, error: String(json.error ?? "server") };
+    } catch {
+      return { ok: false, error: "server" };
+    }
+  }, [load]);
+
   const logout = useCallback(async () => {
     await fetch("/api/auth", {
       method: "POST",
@@ -198,7 +217,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
   }, []);
 
   return (
-    <Ctx.Provider value={{ ready, role, data, admin, syncing, lastSync, toasts, toast, dismissToast, refresh, act, login, logout }}>
+    <Ctx.Provider value={{ ready, role, data, admin, syncing, lastSync, toasts, toast, dismissToast, refresh, act, login, register, logout }}>
       {children}
     </Ctx.Provider>
   );

@@ -347,7 +347,9 @@ function AdminLoginGate({ onLogin }: { onLogin: (email: string, password: string
 
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!email.trim() || !password) { setErr(true); return; }
+    // Only the e-mail is mandatory: the principal administrator can sign in
+    // directly by e-mail without a password.
+    if (!email.trim()) { setErr(true); return; }
     setBusy(true);
     setErr(false);
     const r = await onLogin(email, password);
@@ -402,7 +404,7 @@ function AdminLoginGate({ onLogin }: { onLogin: (email: string, password: string
               />
             </div>
             <div>
-              <label className="label !text-cream/65">{t("password")}</label>
+              <label className="label !text-cream/65">{t("ad.pwdOptional")}</label>
               <input
                 type="password"
                 name="sa_secret_manual"
@@ -414,7 +416,6 @@ function AdminLoginGate({ onLogin }: { onLogin: (email: string, password: string
                 data-lpignore="true"
                 data-1p-ignore="true"
                 data-form-type="other"
-                required
               />
             </div>
             {err && (

@@ -44,11 +44,12 @@ function planEnd(planId: string): Date {
 }
 
 export async function POST(req: Request) {
+  await ensureSeed();
+  const body = await req.json().catch(() => ({}));
+  const action = String(body.action ?? "");
+  const p = (body.payload ?? {}) as Record<string, unknown>;
+
   try {
-    await ensureSeed();
-    const body = await req.json().catch(() => ({}));
-    const action = String(body.action ?? "");
-    const p = (body.payload ?? {}) as Record<string, unknown>;
     /* ── Public ── */
     if (action === "public.subscribe") {
       const schoolName = str(p.schoolName);
@@ -515,7 +516,7 @@ export async function POST(req: Request) {
 
     return Response.json({ ok: false, error: "unknown" }, { status: 400 });
   } catch (err) {
-    console.error("action error", err);
+    console.error("action error", action, err);
     return Response.json({ ok: false, error: "server" }, { status: 500 });
   }
 }

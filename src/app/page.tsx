@@ -7,7 +7,7 @@ import { PLANS, PLATFORM, STRUCTURE, BLOCKS, BLOCK_COLORS, VARIANTS, money, waLi
 import { Icon, WaIcon, Logo, LangToggle, ToastHost, Field, CopyBtn, Badge } from "@/components/ui";
 
 export default function LandingPage() {
-  const { ready, role, login, act, toast } = useApp();
+  const { ready, role, login, register, act, toast } = useApp();
   const { t, locale } = useI18n();
   const router = useRouter();
 
@@ -16,6 +16,12 @@ export default function LandingPage() {
   const [password, setPassword] = useState("");
   const [err, setErr] = useState(false);
   const [busy, setBusy] = useState(false);
+
+  /* registration */
+  const [authTab, setAuthTab] = useState<"login" | "register">("login");
+  const [reg, setReg] = useState({ name: "", email: "", password: "", confirm: "", phone: "" });
+  const [regErr, setRegErr] = useState<string | null>(null);
+  const [regBusy, setRegBusy] = useState(false);
 
   /* subscription */
   const [structures, setStructures] = useState<Block[]>(["nursery", "primary", "secondary"]);
@@ -61,6 +67,39 @@ export default function LandingPage() {
       setEmail(""); setPassword("");
       router.push("/app");
     } else setErr(true);
+  };
+
+  const doRegister = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setRegErr(null);
+    if (reg.name.trim().length < 2) { setRegErr(t("pub.regInvalidName")); return; }
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(reg.email.trim())) { setRegErr(t("pub.regInvalidEmail")); return; }
+    if (reg.password.length < 6) { setRegErr(t("pub.regWeak")); return; }
+    if (reg.password !== reg.confirm) { setRegErr(t("pub.regMismatch")); return; }
+
+    setRegBusy(true);
+    const res = await register({
+      name: reg.name.trim(),
+      email: reg.email.trim().toLowerCase(),
+      password: reg.password,
+      phone: reg.phone.trim(),
+    });
+    setRegBusy(false);
+
+    if (res.ok) {
+      toast(t("pub.regSuccess"), "success");
+      setReg({ name: "", email: "", password: "", confirm: "", phone: "" });
+      router.push("/app");
+      return;
+    }
+    const map: Record<string, string> = {
+      emailTaken: t("pub.regTaken"),
+      reservedEmail: t("pub.regReserved"),
+      weakPassword: t("pub.regWeak"),
+      invalidEmail: t("pub.regInvalidEmail"),
+      invalidName: t("pub.regInvalidName"),
+    };
+    setRegErr(map[res.error ?? ""] ?? t("errorGeneric"));
   };
 
   const order = async () => {
@@ -165,29 +204,90 @@ export default function LandingPage() {
                   </button>
                 </div>
               ) : (
-                <form onSubmit={doLogin} autoComplete="off" className="mt-5 space-y-3.5">
-                  <div>
-                    <label className="label !text-cream/60">{t("email")}</label>
-                    <input className="input !bg-white/10 !border-white/20 !text-cream placeholder:!text-cream/30" type="email" name="school_ident" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="direction@ecole.cm" autoComplete="off" data-lpignore="true" data-1p-ignore="true" data-form-type="other" />
-                  </div>
-                  <div>
-                    <label className="label !text-cream/60">{t("password")}</label>
-                    <input className="input !bg-white/10 !border-white/20 !text-cream placeholder:!text-cream/30" type="password" name="school_secret" value={password} onChange={(e) => setPassword(e.target.value)} placeholder="••••••••" autoComplete="new-password" data-lpignore="true" data-1p-ignore="true" data-form-type="other" />
-                  </div>
-                  {err && <p className="text-coral text-xs font-bold flex items-center gap-1.5 anim-pop"><Icon name="alert" size={13} /> {t("pub.invalid")}</p>}
-                  <button type="submit" className="btn btn-amber w-full text-base py-3.5" disabled={busy}>
-                    <Icon name={busy ? "refresh" : "key"} size={17} className={busy ? "spin" : ""} /> {t("login")}
-                  </button>
-                  <div className="pt-2 border-t border-white/10">
-                    <p className="text-[10px] uppercase tracking-widest text-cream/40 font-bold mb-2">Démo / Demo</p>
-                    <div className="flex flex-wrap gap-2">
-                      <button type="button" className="chip bg-white/10 text-cream/80 hover:bg-amber hover:text-board-2 transition-colors"
-                        onClick={() => { setEmail("direction@ecole.cm"); setPassword("demo1234"); setErr(false); }}>
-                        🏫 {t("pub.demoDir")}
+                <>
+                  {/* Tabs: Connexion / Créer un compte */}
+                  <div className="mt-4 inline-flex w-full rounded-xl bg-white/10 p-1 gap-1">
+                    {(["login", "register"] as const).map((tab) => (
+                      <button
+                        type="button"
+                        key={tab}
+                        onClick={() => { setAuthTab(tab); setErr(false); setRegErr(null); }}
+                        className={`grow rounded-lg px-3 py-2 text-xs font-extrabold uppercase tracking-wide transition-all ${authTab === tab ? "bg-amber text-board-2 shadow" : "text-cream/65 hover:text-cream"}`}
+                      >
+                        {tab === "login" ? t("pub.tabLogin") : t("pub.tabRegister")}
                       </button>
-                    </div>
+                    ))}
                   </div>
-                </form>
+
+                  {authTab === "login" ? (
+                    <form onSubmit={doLogin} autoComplete="off" className="mt-4 space-y-3.5">
+                      <div>
+                        <label className="label !text-cream/60">{t("email")}</label>
+                        <input className="input !bg-white/10 !border-white/20 !text-cream placeholder:!text-cream/30" type="email" name="school_ident" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="direction@ecole.cm" autoComplete="off" data-lpignore="true" data-1p-ignore="true" data-form-type="other" />
+                      </div>
+                      <div>
+                        <label className="label !text-cream/60">{t("password")}</label>
+                        <input className="input !bg-white/10 !border-white/20 !text-cream placeholder:!text-cream/30" type="password" name="school_secret" value={password} onChange={(e) => setPassword(e.target.value)} placeholder="••••••••" autoComplete="new-password" data-lpignore="true" data-1p-ignore="true" data-form-type="other" />
+                      </div>
+                      {err && <p className="text-coral text-xs font-bold flex items-center gap-1.5 anim-pop"><Icon name="alert" size={13} /> {t("pub.invalid")}</p>}
+                      <button type="submit" className="btn btn-amber w-full text-base py-3.5" disabled={busy}>
+                        <Icon name={busy ? "refresh" : "key"} size={17} className={busy ? "spin" : ""} /> {t("login")}
+                      </button>
+                      <p className="text-[10.5px] text-cream/45 flex items-start gap-1.5 leading-relaxed">
+                        <Icon name="shield" size={12} className="shrink-0 mt-0.5 text-amber" /> {t("pub.adminDirect")}
+                      </p>
+                      <button type="button" onClick={() => { setAuthTab("register"); setRegErr(null); }}
+                        className="w-full text-center text-xs font-bold text-amber hover:text-white underline underline-offset-4">
+                        {t("pub.noAccount")}
+                      </button>
+                      <div className="pt-2 border-t border-white/10">
+                        <p className="text-[10px] uppercase tracking-widest text-cream/40 font-bold mb-2">Démo / Demo</p>
+                        <div className="flex flex-wrap gap-2">
+                          <button type="button" className="chip bg-white/10 text-cream/80 hover:bg-amber hover:text-board-2 transition-colors"
+                            onClick={() => { setEmail("direction@ecole.cm"); setPassword("demo1234"); setErr(false); }}>
+                            🏫 {t("pub.demoDir")}
+                          </button>
+                        </div>
+                      </div>
+                    </form>
+                  ) : (
+                    <form onSubmit={doRegister} autoComplete="off" className="mt-4 space-y-3">
+                      <div>
+                        <p className="text-[11px] text-cream/70 leading-relaxed">{t("pub.regSub")}</p>
+                      </div>
+                      <div>
+                        <label className="label !text-cream/60">{t("pub.regName")}</label>
+                        <input className="input !bg-white/10 !border-white/20 !text-cream placeholder:!text-cream/30" value={reg.name} onChange={(e) => setReg({ ...reg, name: e.target.value })} placeholder="Complexe Bilingue Les Palmiers" autoComplete="organization" />
+                      </div>
+                      <div>
+                        <label className="label !text-cream/60">{t("email")}</label>
+                        <input className="input !bg-white/10 !border-white/20 !text-cream placeholder:!text-cream/30" type="email" value={reg.email} onChange={(e) => setReg({ ...reg, email: e.target.value })} placeholder="direction@votre-ecole.cm" autoComplete="off" data-form-type="other" />
+                      </div>
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                        <div>
+                          <label className="label !text-cream/60">{t("pub.regPassword")}</label>
+                          <input className="input !bg-white/10 !border-white/20 !text-cream placeholder:!text-cream/30" type="password" value={reg.password} onChange={(e) => setReg({ ...reg, password: e.target.value })} placeholder="••••••" autoComplete="new-password" />
+                        </div>
+                        <div>
+                          <label className="label !text-cream/60">{t("pub.regConfirm")}</label>
+                          <input className="input !bg-white/10 !border-white/20 !text-cream placeholder:!text-cream/30" type="password" value={reg.confirm} onChange={(e) => setReg({ ...reg, confirm: e.target.value })} placeholder="••••••" autoComplete="new-password" />
+                        </div>
+                      </div>
+                      <div>
+                        <label className="label !text-cream/60">{t("pub.regPhone")}</label>
+                        <input className="input !bg-white/10 !border-white/20 !text-cream placeholder:!text-cream/30 tabular" value={reg.phone} onChange={(e) => setReg({ ...reg, phone: e.target.value })} placeholder="6XX XX XX XX" />
+                      </div>
+                      {regErr && <p className="text-coral text-xs font-bold flex items-center gap-1.5 anim-pop"><Icon name="alert" size={13} /> {regErr}</p>}
+                      <button type="submit" className="btn btn-amber w-full text-base py-3.5" disabled={regBusy}>
+                        <Icon name={regBusy ? "refresh" : "userPlus"} size={17} className={regBusy ? "spin" : ""} /> {t("pub.regSubmit")}
+                      </button>
+                      <button type="button" onClick={() => { setAuthTab("login"); setRegErr(null); }}
+                        className="w-full text-center text-xs font-bold text-amber hover:text-white underline underline-offset-4">
+                        {t("pub.haveAccount")}
+                      </button>
+                    </form>
+                  )}
+                </>
               )}
               <p className="text-[10px] text-cream/40 mt-4 flex items-center gap-1.5"><Icon name="shield" size={11} /> {t("pub.secure")}</p>
             </div>

@@ -1,10 +1,14 @@
 import { db } from "@/db";
-import { tenants, classes, students, payments, subjects, grades, staff, waLogs, updates, subRequests } from "@/db/schema";
-import { hashPassword } from "@/lib/auth";
+import { tenants, classes, students, payments, subjects, grades, staff, waLogs, updates, subRequests, platformAdmins } from "@/db/schema";
+import { hashPassword, PRINCIPAL_ADMIN_EMAIL } from "@/lib/auth";
 import { STRUCTURE, BLOCKS, SUBJECT_CATALOG } from "@/lib/core";
 import { count, eq } from "drizzle-orm";
+import { initDb } from "@/db";
 
-const g = globalThis as typeof globalThis & { __scolariaSeeded?: boolean };
+const g = globalThis as typeof globalThis & {
+  __scolariaSeeded?: boolean;
+  __scolariaSeedPromise?: Promise<void>;
+};
 
 function mulberry32(a: number) {
   return () => {
@@ -22,18 +26,40 @@ function iso(d: Date): string {
   return d.toISOString().slice(0, 10);
 }
 
+/**
+ * Cold-start guard used by every API route:
+ * 1. resolves the database (PostgreSQL or embedded fallback),
+ * 2. creates the schema if needed (idempotent, runtime only → build-safe),
+ * 3. seeds deterministic demo data the very first time.
+ */
 export async function ensureSeed(): Promise<void> {
   if (g.__scolariaSeeded) return;
-  try {
-    const [{ value }] = await db.select({ value: count() }).from(tenants);
-    if (value > 0) {
+  if (!g.__scolariaSeedPromise) {
+    g.__scolariaSeedPromise = (async () => {
+      await initDb();
+      // The principal platform administrator is always recognised by default,
+      // both on PostgreSQL and on the embedded fallback database.
+      await ensurePrincipalAdmin();
+      const [{ value }] = await db.select({ value: count() }).from(tenants);
+      if (value === 0) await seed();
       g.__scolariaSeeded = true;
-      return;
-    }
-    await seed();
-    g.__scolariaSeeded = true;
-  } catch {
-    /* tables may not exist yet (pre-push); will retry on next call */
+    })().catch((err) => {
+      g.__scolariaSeedPromise = undefined;
+      console.error("[seed] initialisation skipped:", (err as Error).message);
+    });
+  }
+  await g.__scolariaSeedPromise;
+}
+
+/** Seeds the private platform administrator row (idempotent, works on every database). */
+async function ensurePrincipalAdmin() {
+  try {
+    await db
+      .insert(platformAdmins)
+      .values({ email: PRINCIPAL_ADMIN_EMAIL, label: "Administrateur principal", isPrincipal: true })
+      .onConflictDoNothing({ target: platformAdmins.email });
+  } catch (err) {
+    console.warn("[seed] platform admin row skipped:", (err as Error).message?.slice(0, 140));
   }
 }
 
@@ -69,7 +95,6 @@ async function seed() {
     subscriptionEndsAt: new Date(Date.now() + 3650 * 86400000),
   }).returning();
 
-  // Second demo subscriber (metadata only visible to admin)
   await db.insert(tenants).values({
     name: "Little Stars Nursery & Primary",
     email: "info@littlestars.cm",
@@ -83,14 +108,12 @@ async function seed() {
     subscriptionEndsAt: new Date(Date.now() - 5 * 86400000),
   });
 
-  // Sandbox: every block, empty classes
   for (const b of BLOCKS) {
     for (const lv of STRUCTURE[b].levels) {
       await db.insert(classes).values({ tenantId: sandbox.id, block: b, levelCode: lv.code, variant: "general", tuition: 25000 });
     }
   }
 
-  // Demo classes
   const demoClasses = [
     { block: "nursery", levelCode: "PS", variant: "general", tuition: 20000 },
     { block: "nursery", levelCode: "GS", variant: "bilingual", tuition: 25000 },
@@ -177,7 +200,6 @@ async function seed() {
     }
   }
 
-  // Subjects + term-1 grades for CP and 6E (auto-generated sheets)
   const sheetDefs: Record<string, { fr: string; coef?: number }[]> = {
     CP: [{ fr: "Français" }, { fr: "Anglais" }, { fr: "Mathématiques" }, { fr: "Éveil / Découverte" }],
     "6E": [{ fr: "Français" }, { fr: "Anglais" }, { fr: "Mathématiques" }, { fr: "Sciences (SVT)" }, { fr: "Histoire" }, { fr: "Éducation civique (ECM)" }],
@@ -212,25 +234,22 @@ async function seed() {
     },
   ]);
 
-  // Staff & WhatsApp logs & archived sample for demo tenant
   await db.insert(staff).values([
     { tenantId: demo.id, fullName: "M. ATANGANA Henri", role: "director", block: "all", phone: "677123456", email: "direction@ecole.cm", salary: 185000, status: "active", hiredAt: iso(daysAgo(400)) },
-    { tenantId: demo.id, fullName: "Mme NKODO Pauline", role: "teacher", block: "primary", classId: classIds["CP"], phone: "699441122", email: "pauline.nkodo@ecole.cm", salary: 95000, status: "active", hiredAt: iso(daysAgo(280)) },
+    { tenantId: demo.id, fullName: "Mme NKODO Pauline", role: "teacher", block: "primary", classId: classIds["CP"], phone: "699441122", email: "pauline@ecole.cm", salary: 95000, status: "active", hiredAt: iso(daysAgo(280)) },
     { tenantId: demo.id, fullName: "M. FOKOU Thierry", role: "teacher", block: "secondary", classId: classIds["6E"], phone: "675334455", email: "fokou@ecole.cm", salary: 115000, status: "active", hiredAt: iso(daysAgo(240)) },
     { tenantId: demo.id, fullName: "Mme EBOULE Mireille", role: "bursar", block: "all", phone: "691887700", email: "caisse@ecole.cm", salary: 110000, status: "active", hiredAt: iso(daysAgo(310)) },
   ]);
 
-  await db.insert(waLogs).values([
-    {
-      tenantId: demo.id,
-      studentId: studentRows[0]?.id ?? null,
-      recipientName: "Parent — Élève MAT-2026-001",
-      phone: "677889900",
-      kind: "enroll",
-      message: "Confirmation d'inscription envoyée avec reçu joint.",
-      createdAt: daysAgo(2),
-    },
-  ]);
+  await db.insert(waLogs).values({
+    tenantId: demo.id,
+    studentId: studentRows[0]?.id ?? null,
+    recipientName: "Parent — Élève MAT-2026-001",
+    phone: "677889900",
+    kind: "enroll",
+    message: "Confirmation d'inscription envoyée avec reçu joint.",
+    createdAt: daysAgo(2),
+  });
 
   await db.insert(students).values({
     tenantId: demo.id,
@@ -259,6 +278,5 @@ async function seed() {
     { schoolName: "Bilingual Academy of Buea", phone: "670112233", email: "admin@babuea.cm", plan: "quarterly", structure: "nursery,primary", paymentMethod: "momo", paymentRef: "MM260409.0915.C442", status: "pending", createdAt: daysAgo(3) },
   ]);
 
-  // keep linter happy about unused import in some builds
   void eq;
 }

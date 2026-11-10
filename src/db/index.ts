@@ -1,49 +1,130 @@
-import { drizzle } from "drizzle-orm/node-postgres";
-import { Pool, types as pgTypes } from "pg";
+import type { NodePgDatabase } from "drizzle-orm/node-postgres";
+import { sql } from "drizzle-orm";
+import { BOOTSTRAP_SQL } from "./bootstrap";
 
-/**
- * Deployment-resilient PostgreSQL connection (Render / Vercel / VPS / local).
- *
- * - A `pg.Pool` never validates the connection string at construction time —
- * it only connects on the first query. All of our routes are `force-dynamic`,
- * so no query runs while Render/Next builds the app. The build can therefore
- * never fail because `DATABASE_URL` is missing (secure placeholder fallback).
- * - At runtime without `DATABASE_URL`, queries fail cleanly and are caught by
- * the routes (e.g. `/api/health` answers `{ ok: false }` instead of crashing).
- * - Set `DATABASE_URL` (Render PostgreSQL / Neon / Supabase / local Postgres)
- * to activate full persistence. Optional `DATABASE_SSL=disable` for local ones.
- */
+export type Database = NodePgDatabase<Record<string, never>>;
 
-pgTypes.setTypeParser(20, "text", (v) => (v === null ? null : Number(v))); // bigint → number
-
-const databaseUrl = process.env.DATABASE_URL;
-
-const isLocal = (url: string) =>
-  url.includes("127.0.0.1") || url.includes("localhost") || url.includes("sslmode=disable");
-
-const sslDisabled =
-  process.env.DATABASE_SSL === "disable" || process.env.DATABASE_SSL === "false" || process.env.PGSSLMODE === "disable";
-
-const connectionString = databaseUrl ?? "postgresql://postgres:postgres@127.0.0.1:5432/scolaria_placeholder";
+export type DbMode = "postgres" | "embedded";
 
 const globalForDb = globalThis as typeof globalThis & {
-  __scolariaPool?: Pool;
+  __scolariaDb?: Database;
+  __scolariaDbInit?: Promise<Database>;
+  __scolariaDbMode?: DbMode;
+  __scolariaDbError?: string;
 };
 
-export const pool =
-  globalForDb.__scolariaPool ??
-  new Pool({
-    connectionString,
-    max: 5,
-    idleTimeoutMillis: 30000,
-    connectionTimeoutMillis: 8000,
-    ssl: isLocal(connectionString) || sslDisabled ? undefined : { rejectUnauthorized: false },
-  });
+/**
+ * Resolves a database connection.
+ * - If DATABASE_URL is provided → PostgreSQL (Render / Neon / Supabase / local).
+ * - Otherwise → embedded PGlite (persistent local folder, in-memory fallback),
+ *   so a missing environment variable can never break the build or the boot.
+ */
+async function createDatabase(): Promise<Database> {
+  const url = (process.env.DATABASE_URL ?? "").trim();
 
-if (process.env.NODE_ENV !== "production") {
-  globalForDb.__scolariaPool = pool;
+  if (url) {
+    const { drizzle } = await import("drizzle-orm/node-postgres");
+    const { Pool } = await import("pg");
+    const pool = new Pool({
+      connectionString: url,
+      ssl: /render\.com|neon\.tech|supabase|amazonaws|azure/i.test(url) ? { rejectUnauthorized: false } : undefined,
+      max: Number(process.env.PGPOOL_MAX ?? 5),
+      connectionTimeoutMillis: 15000,
+    });
+    const instance = drizzle(pool) as unknown as Database;
+    await bootstrap(instance);
+    globalForDb.__scolariaDbMode = "postgres";
+    return instance;
+  }
+
+  // ── Embedded fallback (no DATABASE_URL) ──────────────────────────
+  const { PGlite } = await import("@electric-sql/pglite");
+  const { drizzle } = await import("drizzle-orm/pglite");
+
+  const { mkdir } = await import("node:fs/promises");
+  const { dirname, resolve } = await import("node:path");
+  const dataDir = resolve(process.cwd(), (process.env.PGLITE_DATA_DIR ?? ".data/pglite").trim() || ".data/pglite");
+
+  let client: InstanceType<typeof PGlite>;
+  try {
+    // PGlite doesn't create nested parents itself → do it before opening.
+    await mkdir(dirname(dataDir), { recursive: true });
+    await mkdir(dataDir, { recursive: true });
+    client = new PGlite(dataDir);
+    await client.waitReady;
+  } catch (err) {
+    console.warn("[db] embedded storage unavailable, using memory mode:", (err as Error).message?.slice(0, 140));
+    client = new PGlite("memory://");
+    await client.waitReady;
+  }
+
+  const instance = drizzle(client) as unknown as Database;
+  await bootstrap(instance);
+  globalForDb.__scolariaDbMode = "embedded";
+  return instance;
 }
 
-export const db = drizzle(pool);
+async function bootstrap(instance: Database) {
+  for (const statement of BOOTSTRAP_SQL) {
+    try {
+      await instance.execute(sql.raw(statement));
+    } catch (err) {
+      // Table/column already exists or a legacy constraint name differs: never block boot.
+      console.warn("[db] bootstrap statement skipped:", (err as Error).message?.slice(0, 160));
+    }
+  }
+}
 
-export const dbConfigured = Boolean(databaseUrl);
+/** Must be awaited once before any query (handled by ensureSeed / API routes). */
+export async function initDb(): Promise<Database> {
+  if (globalForDb.__scolariaDb) return globalForDb.__scolariaDb;
+  if (!globalForDb.__scolariaDbInit) {
+    globalForDb.__scolariaDbInit = createDatabase()
+      .then((db) => {
+        globalForDb.__scolariaDb = db;
+        return db;
+      })
+      .catch((err) => {
+        globalForDb.__scolariaDbError = (err as Error).message;
+        globalForDb.__scolariaDbInit = undefined;
+        throw err;
+      });
+  }
+  return globalForDb.__scolariaDbInit;
+}
+
+export function getDbMode(): DbMode | "unknown" {
+  return globalForDb.__scolariaDbMode ?? "unknown";
+}
+
+export async function getDatabaseInfo() {
+  const mode = globalForDb.__scolariaDbMode ?? ((process.env.DATABASE_URL ?? "").trim() ? "postgres" : "embedded");
+  return {
+    mode,
+    configured: Boolean((process.env.DATABASE_URL ?? "").trim()),
+    error: globalForDb.__scolariaDbError ?? null,
+  };
+}
+
+/**
+ * Lazy proxy so importing this module never throws (build-safe) while every
+ * query still reaches the resolved driver once initDb() has completed.
+ */
+export const db = new Proxy({} as Database, {
+  get(_target, prop) {
+    const instance = globalForDb.__scolariaDb;
+    if (!instance) {
+      throw new Error("Database not initialised yet — await ensureSeed()/initDb() first.");
+    }
+    const value = (instance as unknown as Record<string | symbol, unknown>)[prop];
+    return typeof value === "function" ? (value as (...args: unknown[]) => unknown).bind(instance) : value;
+  },
+});
+
+/** Kept for backwards compatibility with scripts performing raw SQL. */
+export const pool = {
+  query: async (text: string) => {
+    const instance = await initDb();
+    return instance.execute(sql.raw(text));
+  },
+};

@@ -1,17 +1,25 @@
-import { db } from "@/db";
+import { db, getDatabaseInfo, initDb } from "@/db";
 import { sql } from "drizzle-orm";
 import { ensureSeed } from "@/lib/seed";
 
 export const dynamic = "force-dynamic";
+export const runtime = "nodejs";
 
 export async function GET() {
   try {
+    await initDb();
     await db.execute(sql`select 1`);
-    // Idempotent demo seeding (no-op once tenants exist or before schema push)
+    // Idempotent demo seeding (no-op once data exists)
     await ensureSeed();
-    return Response.json({ ok: true, db: true });
-  } catch {
-    // Never hard-fail the healthcheck: the app itself serves, DB just not wired.
-    return Response.json({ ok: true, db: false, mode: "fallback" });
+    const info = await getDatabaseInfo();
+    return Response.json(
+      { ok: true, db: info.mode, configured: info.configured, timestamp: new Date().toISOString() },
+      { headers: { "Cache-Control": "no-store" } }
+    );
+  } catch (err) {
+    return Response.json(
+      { ok: false, error: (err as Error).message ?? "database unavailable" },
+      { status: 500, headers: { "Cache-Control": "no-store" } }
+    );
   }
 }

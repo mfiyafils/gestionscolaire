@@ -4,12 +4,12 @@
   "scripts": {
     "dev": "next dev",
     "build": "next build",
-    "start": "sh -c \"next start -H 0.0.0.0 -p ${PORT:-3000}\"",
+    "start": "next start",
     "lint": "eslint .",
-    "typecheck": "tsc --noEmit",
-    "render-setup": "npm install && npx drizzle-kit push --force || true && npm run build"
+    "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@electric-sql/pglite": "^0.5.16",
     "dotenv": "17.3.1",
     "drizzle-orm": "0.45.2",
     "next": "16.2.6",

@@ -1,6 +1,8 @@
 import { getSession } from "@/lib/auth";
+import { ensureSeed } from "@/lib/seed";
 
 export const dynamic = "force-dynamic";
+export const runtime = "nodejs";
 
 type HostTarget = "vercel" | "netlify";
 type Category = "patch" | "feature" | "db" | "config" | "api";
@@ -195,6 +197,7 @@ export const RELEASE_PATCH_${version.replace(/\W+/g, "_")} = {
 }
 
 export async function POST(req: Request) {
+  await ensureSeed();
   const session = await getSession();
   if (!session || session.role !== "admin") {
     return Response.json({ ok: false, error: "forbidden" }, { status: 403 });
