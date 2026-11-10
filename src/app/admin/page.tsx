@@ -10,6 +10,7 @@ import { Workspace } from "@/components/workspace";
 import { AiCodeAssistant } from "@/components/ai-updater";
 
 type Tab = "tenants" | "requests" | "updates" | "sandbox";
+type TenantFilter = "all" | "active" | "suspended" | "revoked";
 
 export default function AdminPage() {
   const { ready, role, admin, data, act, toast, login, logout, refresh, syncing } = useApp();
@@ -21,6 +22,12 @@ export default function AdminPage() {
   const [deleteFor, setDeleteFor] = useState<AdminTenant | null>(null);
   const [creds, setCreds] = useState<{ email: string; password?: string; phone?: string; schoolName?: string } | null>(null);
   const [busyId, setBusyId] = useState<string | null>(null);
+  const [tenantQuery, setTenantQuery] = useState("");
+  const [tenantFilter, setTenantFilter] = useState<TenantFilter>("all");
+  const [sandboxPersona, setSandboxPersona] = useState<"all" | Block>("all");
+  const [sandboxDevice, setSandboxDevice] = useState<"desktop" | "mobile">("desktop");
+  const [sandboxResetOpen, setSandboxResetOpen] = useState(false);
+  const [sandboxBusy, setSandboxBusy] = useState(false);
 
   useEffect(() => {
     if (!ready) return;
@@ -36,8 +43,20 @@ export default function AdminPage() {
       active: active.length,
       pending: admin.requests.filter((r) => r.status === "pending").length,
       revenue,
+      suspended: admin.tenants.filter((x) => x.status === "suspended").length,
+      revoked: admin.tenants.filter((x) => x.status === "revoked").length,
     };
   }, [admin]);
+
+  const visibleTenants = useMemo(() => {
+    if (!admin) return [];
+    const needle = tenantQuery.trim().toLowerCase();
+    return admin.tenants.filter((x) => {
+      if (tenantFilter !== "all" && x.status !== tenantFilter) return false;
+      if (!needle) return true;
+      return `${x.name} ${x.email} ${x.phone}`.toLowerCase().includes(needle);
+    });
+  }, [admin, tenantQuery, tenantFilter]);
 
   if (!ready || role === "tenant") {
     return (
@@ -61,11 +80,30 @@ export default function AdminPage() {
     );
   }
 
+  const statusToast: Record<string, string> = {
+    suspended: t("ad.suspendDone", { name: "" }),
+    active: t("ad.readmitDone", { name: "" }),
+    revoked: t("ad.removeDone", { name: "" }),
+  };
+
   const setStatus = async (tenant: AdminTenant, status: string) => {
     setBusyId(tenant.id);
     const res = await act("admin.tenant.update", { id: tenant.id, status });
     setBusyId(null);
-    toast(res.ok ? t("savedOk") : t("errorGeneric"), res.ok ? "success" : "error");
+    if (!res.ok) {
+      toast(t("errorGeneric"), "error");
+      return;
+    }
+    const template = statusToast[status] ?? t("savedOk");
+    toast(template.replace("{name} ", "").replace("{name}", tenant.name), "success");
+  };
+
+  const resetSandbox = async () => {
+    setSandboxBusy(true);
+    const res = await act("sandbox.reset");
+    setSandboxBusy(false);
+    setSandboxResetOpen(false);
+    toast(res.ok ? t("se.sandboxResetDone") : t("errorGeneric"), res.ok ? "success" : "error");
   };
   const approve = async (r: SubRequestRow, decision: "approved" | "rejected") => {
     setBusyId(r.id);
@@ -82,10 +120,17 @@ export default function AdminPage() {
     s === "active" ? <Badge tone="green">{t("active")}</Badge> : s === "suspended" ? <Badge tone="amber">{t("suspended")}</Badge> : <Badge tone="red">{t("revoked")}</Badge>;
 
   const TABS: { id: Tab; icon: string; label: string; badge?: number }[] = [
-    { id: "tenants", icon: "building", label: t("ad.tenants") },
+    { id: "tenants", icon: "building", label: t("ad.subscribersTitle") },
     { id: "requests", icon: "mail", label: t("ad.requests"), badge: stats.pending },
     { id: "updates", icon: "rocket", label: t("ad.updates") },
-    { id: "sandbox", icon: "flask", label: t("ad.sandbox") },
+    { id: "sandbox", icon: "flask", label: t("ad.simModuleTitle") },
+  ];
+
+  const FILTERS: { id: TenantFilter; label: string; count: number; tone: string }[] = [
+    { id: "all", label: t("ad.filterAll"), count: stats.total, tone: "#0f3325" },
+    { id: "active", label: t("ad.filterActive"), count: stats.active, tone: "#1b8654" },
+    { id: "suspended", label: t("ad.filterSuspended"), count: stats.suspended, tone: "#b86f00" },
+    { id: "revoked", label: t("ad.filterRevoked"), count: stats.revoked, tone: "#bc2b1c" },
   ];
 
   return (
@@ -139,15 +184,61 @@ export default function AdminPage() {
           </button>
         </div>
 
-        {/* ── TENANTS ── */}
+        {/* ── SUBSCRIBERS MANAGEMENT ── */}
         {tab === "tenants" && (
           <div className="space-y-3 anim-fade">
-            <div className="flex items-center justify-between gap-2 flex-wrap">
-              <h2 className="font-display font-bold text-board text-xl">{t("ad.tenants")}</h2>
-              <button type="button" className="btn btn-primary btn-sm" onClick={() => setAddOpen(true)}><Icon name="plus" size={15} /> {t("ad.addTenant")}</button>
+            <div className="flex flex-wrap items-start justify-between gap-3">
+              <div>
+                <h2 className="font-display font-black text-board text-2xl flex items-center gap-2">
+                  <span className="p-1.5 rounded-lg bg-board/10 text-board"><Icon name="building" size={20} /></span>
+                  {t("ad.subscribersTitle")}
+                </h2>
+                <p className="text-xs text-inkmut mt-1 max-w-2xl leading-relaxed">{t("ad.subscribersSub")}</p>
+              </div>
+              <button type="button" className="btn btn-primary" onClick={() => setAddOpen(true)}>
+                <Icon name="plus" size={16} /> {t("ad.addTenant")}
+              </button>
             </div>
+
+            {/* Counters acting as status filters */}
+            <div className="grid grid-cols-2 lg:grid-cols-4 gap-2.5">
+              {FILTERS.map((f) => (
+                <button
+                  type="button"
+                  key={f.id}
+                  onClick={() => setTenantFilter(f.id)}
+                  className={`card px-3.5 py-3 text-left transition-all cursor-pointer hover:-translate-y-0.5 ${tenantFilter === f.id ? "ring-2 ring-offset-1" : ""}`}
+                  style={{ borderTopWidth: 4, borderTopColor: f.tone, ...(tenantFilter === f.id ? { boxShadow: `0 0 0 2px ${f.tone}55` } : {}) }}
+                >
+                  <p className="text-[10.5px] font-extrabold uppercase tracking-wider text-inkmut">{f.label}</p>
+                  <p className="font-display font-black text-2xl text-board tabular mt-0.5">{f.count}</p>
+                </button>
+              ))}
+            </div>
+
+            {/* Search */}
+            <div className="card p-3 flex flex-wrap gap-2.5 items-center">
+              <div className="relative grow min-w-[220px]">
+                <Icon name="search" size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-inkmut" />
+                <input
+                  className="input pl-9"
+                  value={tenantQuery}
+                  onChange={(e) => setTenantQuery(e.target.value)}
+                  placeholder={t("ad.searchTenant")}
+                />
+              </div>
+              {(tenantQuery || tenantFilter !== "all") && (
+                <button type="button" className="btn btn-ghost btn-sm" onClick={() => { setTenantQuery(""); setTenantFilter("all"); }}>
+                  <Icon name="x" size={13} /> {t("reset")}
+                </button>
+              )}
+              <Badge tone="board">{visibleTenants.length} / {stats.total}</Badge>
+            </div>
+
             {admin.tenants.length === 0 ? (
               <div className="card"><EmptyState icon="building" title={t("ad.noTenants")} /></div>
+            ) : visibleTenants.length === 0 ? (
+              <div className="card"><EmptyState icon="search" title={t("ad.noMatch")} /></div>
             ) : (
               <>
                 <div className="card overflow-hidden hidden lg:block">
@@ -163,7 +254,7 @@ export default function AdminPage() {
                       </tr>
                     </thead>
                     <tbody>
-                      {admin.tenants.map((x, i) => {
+                      {visibleTenants.map((x, i) => {
                         const list = parseStructures(x.structures?.length ? x.structures : x.structure);
                         const price = subscriptionPrice(x.plan, list);
                         return (
@@ -203,7 +294,7 @@ export default function AdminPage() {
                   </table>
                 </div>
                 <div className="lg:hidden space-y-2.5">
-                  {admin.tenants.map((x) => {
+                  {visibleTenants.map((x) => {
                     const list = parseStructures(x.structures?.length ? x.structures : x.structure);
                     const price = subscriptionPrice(x.plan, list);
                     return (
@@ -282,11 +373,78 @@ export default function AdminPage() {
         {/* ── UPDATES & AI AGENT ── */}
         {tab === "updates" && <UpdatesTab onApproveRequest={(r) => approve(r, "approved")} />}
 
-        {/* ── SANDBOX ── */}
+        {/* ── SIMULATOR / SANDBOX ── */}
         {tab === "sandbox" && (
           <div className="space-y-4 anim-fade">
+            <div className="flex flex-wrap items-start justify-between gap-3">
+              <div>
+                <h2 className="font-display font-black text-board text-2xl flex items-center gap-2">
+                  <span className="p-1.5 rounded-lg bg-coral/15 text-coral"><Icon name="flask" size={20} /></span>
+                  {t("ad.simModuleTitle")}
+                </h2>
+                <p className="text-xs text-inkmut mt-1 max-w-2xl leading-relaxed">{t("ad.simModuleSub")}</p>
+              </div>
+              <div className="flex flex-wrap gap-2">
+                {(["desktop", "mobile"] as const).map((device) => (
+                  <button
+                    type="button"
+                    key={device}
+                    onClick={() => setSandboxDevice(device)}
+                    className={`btn btn-sm ${sandboxDevice === device ? "btn-primary" : "btn-ghost"}`}
+                  >
+                    <Icon name={device === "desktop" ? "dash" : "phone"} size={14} />
+                    {device === "desktop" ? t("ad.simDesktop") : t("ad.simMobile")}
+                  </button>
+                ))}
+                <button type="button" className="btn btn-danger btn-sm" onClick={() => setSandboxResetOpen(true)} disabled={sandboxBusy}>
+                  <Icon name="refresh" size={14} className={sandboxBusy ? "spin" : ""} /> {t("se.sandboxReset")}
+                </button>
+              </div>
+            </div>
+
+            {/* Isolation guarantee */}
+            <div className="rounded-2xl border-2 border-ok/40 bg-ok/8 px-4 py-3 flex items-start gap-3">
+              <span className="p-2 rounded-xl bg-ok/15 text-ok shrink-0"><Icon name="shield" size={18} /></span>
+              <div>
+                <p className="text-sm font-bold text-board">{t("ad.simIsolated")}</p>
+                <p className="text-[11px] text-inkmut mt-0.5">{t("ad.simNoReal", { n: stats.total })}</p>
+              </div>
+            </div>
+
+            {/* Persona switcher */}
+            <div className="card p-3.5 flex flex-wrap items-center gap-2">
+              <span className="text-[10.5px] font-extrabold uppercase tracking-wider text-inkmut">{t("ad.simPersona")} :</span>
+              <button
+                type="button"
+                onClick={() => setSandboxPersona("all")}
+                className={`chip border transition-all cursor-pointer ${sandboxPersona === "all" ? "bg-board text-white border-board shadow" : "bg-parch text-ink border-line hover:border-board"}`}
+              >
+                {t("ad.simAll")}
+              </button>
+              {BLOCKS.map((b) => (
+                <button
+                  type="button"
+                  key={b}
+                  onClick={() => setSandboxPersona(b)}
+                  className={`chip border transition-all cursor-pointer ${sandboxPersona === b ? "text-white border-transparent shadow" : "bg-white text-ink hover:border-board"}`}
+                  style={sandboxPersona === b ? { background: BLOCK_COLORS[b] } : { borderColor: BLOCK_COLORS[b] + "70" }}
+                >
+                  <span className="w-2 h-2 rounded-full" style={{ background: sandboxPersona === b ? "#fff" : BLOCK_COLORS[b] }} />
+                  {locale === "fr" ? STRUCTURE[b].fr : STRUCTURE[b].en}
+                </button>
+              ))}
+            </div>
+
+            {/* Simulation data counters */}
+            <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+              <StatCard icon="users" label={t("ad.simStats")} value={data?.students.length ?? 0} tone="#1b4fd6" sub={`${t("students")} ${t("ad.simStats").toLowerCase()}`} />
+              <StatCard icon="building" label={t("ca.allClasses")} value={data?.classes.length ?? 0} tone="#0f3325" />
+              <StatCard icon="book" label={t("gr.exportSheet")} value={data?.grades.length ?? 0} tone="#ad1e67" />
+              <StatCard icon="coins" label={t("ca.balance")} value={money((data?.payments ?? []).reduce((a, p) => a + p.amount, 0))} tone="#b86f00" />
+            </div>
+
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-              {BLOCKS.map((b) => {
+              {BLOCKS.filter((b) => sandboxPersona === "all" || sandboxPersona === b).map((b) => {
                 const cls = data?.classes.filter((c) => c.block === b) ?? [];
                 const count = data?.students.filter((s) => cls.some((c) => c.id === s.classId)).length ?? 0;
                 return (
@@ -294,24 +452,41 @@ export default function AdminPage() {
                     <p className="font-display font-bold text-board">{locale === "fr" ? STRUCTURE[b].fr : STRUCTURE[b].en}</p>
                     <p className="text-[11px] text-inkmut mt-0.5">{cls.length} {locale === "fr" ? "classes" : "classes"} · {count} {t("students")}</p>
                     <div className="flex flex-wrap gap-1 mt-2">
-                      {cls.slice(0, 8).map((c) => <span key={c.id} className="chip bg-board/6 text-inkmut">{classLabel(c, locale)}</span>)}
-                      {cls.length > 8 && <span className="chip bg-board/6 text-inkmut">+{cls.length - 8}</span>}
+                      {cls.slice(0, 8).map((c) => <span key={c.id} className="chip bg-board/8 text-board border border-line">{classLabel(c, locale)}</span>)}
+                      {cls.length > 8 && <span className="chip bg-board/8 text-board">+{cls.length - 8}</span>}
                     </div>
                   </div>
                 );
               })}
             </div>
+
             <div className="rounded-2xl border-2 border-dashed border-coral/40 bg-coral/5 px-4 py-3 text-sm text-ink flex items-center gap-2.5">
-              <Icon name="flask" size={18} className="text-coral shrink-0" />
-              <span><b>{t("ad.sandboxTitle")}</b> — {t("ad.sandboxMsg")}</span>
+              <Icon name="info" size={18} className="text-coral shrink-0" />
+              <span><b>{t("ad.simViewing")}</b> — {t("ad.sandboxMsg")}</span>
             </div>
-            <div className="card overflow-hidden">
-              <Workspace embedded />
+
+            {/* Live subscriber interface (sandbox tenant only) */}
+            <div className={`mx-auto w-full transition-all ${sandboxDevice === "mobile" ? "max-w-[420px]" : ""}`}>
+              <div className={`card overflow-hidden ${sandboxDevice === "mobile" ? "rounded-[28px] border-[6px] border-board-2 shadow-2xl" : ""}`}>
+                <div className="flex items-center justify-between gap-2 px-4 py-2 bg-board-2 text-cream/80">
+                  <span className="text-[10.5px] font-bold uppercase tracking-widest text-amber">{t("ad.simulation")}</span>
+                  <span className="text-[10px] font-mono">{sandboxDevice === "mobile" ? "375 × 812" : "1440 × auto"}</span>
+                </div>
+                <Workspace embedded />
+              </div>
             </div>
           </div>
         )}
       </main>
 
+      <Confirm
+        open={sandboxResetOpen}
+        onClose={() => setSandboxResetOpen(false)}
+        title={t("se.sandboxReset")}
+        confirmLabel={t("confirm")}
+        message={t("se.sandboxResetMsg")}
+        onConfirm={() => void resetSandbox()}
+      />
       <AddTenantModal open={addOpen} onClose={() => setAddOpen(false)} onCreated={(c) => { setAddOpen(false); setCreds(c); }} />
       <EditTenantModal x={editFor} onClose={() => setEditFor(null)} onResetPassword={(c) => { setEditFor(null); setCreds(c); }} />
       <Confirm open={!!deleteFor} onClose={() => setDeleteFor(null)} title={t("ad.deleteTenant")} confirmLabel={t("delete")}
@@ -443,30 +618,61 @@ function TenantActions({ x, busy, onStatus, onEdit, onDelete }: {
   onStatus: (x: AdminTenant, s: string) => void; onEdit: () => void; onDelete: () => void;
 }) {
   const { t } = useI18n();
+  const cell = "inline-flex items-center gap-1 rounded-lg border px-2 py-1.5 text-[11px] font-bold transition-all disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer";
   return (
     <div className="flex flex-wrap gap-1.5 lg:justify-end">
-      {x.status === "active" && (
-        <button className="btn btn-ghost btn-sm" disabled={busy} onClick={() => onStatus(x, "suspended")} title={t("ad.suspend")}>
-          <Icon name="pause" size={13} /> <span className="hidden xl:inline">{t("ad.suspend")}</span>
-        </button>
-      )}
-      {x.status === "suspended" && (
-        <button className="btn btn-amber btn-sm" disabled={busy} onClick={() => onStatus(x, "active")}>
-          <Icon name="play" size={13} /> {t("ad.activate")}
-        </button>
-      )}
-      {x.status === "revoked" && (
-        <button className="btn btn-amber btn-sm" disabled={busy} onClick={() => onStatus(x, "active")}>
-          <Icon name="play" size={13} /> {t("ad.readmit")}
-        </button>
-      )}
-      {(x.status === "active" || x.status === "suspended") && (
-        <button className="btn btn-ghost btn-sm" disabled={busy} onClick={() => onStatus(x, "revoked")} title={t("ad.revoke")}>
-          <Icon name="x" size={13} /> <span className="hidden xl:inline">{t("ad.revoke")}</span>
-        </button>
-      )}
-      <button className="btn btn-ghost btn-sm" onClick={onEdit} title={t("ad.editContact")}><Icon name="pen" size={13} /></button>
-      <button className="btn btn-danger btn-sm" onClick={onDelete} title={t("ad.deleteTenant")}><Icon name="trash" size={13} /></button>
+      {/* Suspendre (temporary) */}
+      <button
+        type="button"
+        disabled={busy || x.status !== "active"}
+        onClick={() => onStatus(x, "suspended")}
+        title={t("ad.suspend")}
+        className={`${cell} border-amber/50 bg-amber/10 text-amber-2 hover:bg-amber/20`}
+      >
+        <Icon name="pause" size={12} /> {t("ad.suspend")}
+      </button>
+
+      {/* Réadmettre / Réactiver */}
+      <button
+        type="button"
+        disabled={busy || x.status === "active"}
+        onClick={() => onStatus(x, "active")}
+        title={x.status === "revoked" ? t("ad.readmit") : t("ad.activate")}
+        className={`${cell} border-ok/50 bg-ok/12 text-ok hover:bg-ok/20`}
+      >
+        <Icon name="play" size={12} /> {x.status === "revoked" ? t("ad.readmit") : t("ad.activate")}
+      </button>
+
+      {/* Retirer */}
+      <button
+        type="button"
+        disabled={busy || x.status === "revoked"}
+        onClick={() => onStatus(x, "revoked")}
+        title={t("ad.remove")}
+        className={`${cell} border-line bg-white text-inkmut hover:border-board hover:text-board`}
+      >
+        <Icon name="x" size={12} /> {t("ad.remove")}
+      </button>
+
+      {/* Éditer */}
+      <button
+        type="button"
+        onClick={onEdit}
+        title={t("ad.editContact")}
+        className={`${cell} border-line bg-white text-board hover:border-board`}
+      >
+        <Icon name="pen" size={12} /> {t("edit")}
+      </button>
+
+      {/* Supprimer définitivement */}
+      <button
+        type="button"
+        onClick={onDelete}
+        title={t("ad.deleteTenant")}
+        className={`${cell} border-danger/40 bg-danger/10 text-danger hover:bg-danger/20`}
+      >
+        <Icon name="trash" size={12} /> {t("delete")}
+      </button>
     </div>
   );
 }
