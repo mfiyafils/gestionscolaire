@@ -36,8 +36,8 @@ Render → **New +** → **Web Service** → dépôt contenant le `Dockerfile` f
 | Health Check Path | `/api/health` |
 | Auto-Deploy | On |
 
-Ces commandes sont déjà définies dans `package.json` (`"build": "next build"`, `"start": "next start"`).
-`next start` écoute automatiquement sur le port fourni par Render (`PORT`).
+Ces commandes sont déjà définies dans `package.json` (`"build": "next build"`, `"start": "node server.js"`).
+`server.js` écoute **obligatoirement sur `0.0.0.0`** et sur le **port dynamique `process.env.PORT || 10000`** injecté par Render → aucun risque de *« Port scan timeout reached »*. (Alternative : `npm run start:next` = `next start -H 0.0.0.0 -p ${PORT:-10000}`.)
 
 ## 3. Variables d'environnement
 | Clé | Valeur | Obligatoire |

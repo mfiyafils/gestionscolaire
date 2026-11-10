@@ -38,13 +38,18 @@ export async function POST(req: Request) {
     const email = str(body.email).toLowerCase();
     const password = String(body.password ?? "");
 
-    /* ── 1) Principal administrator : INSTANT in-memory bypass ─────────
-       No seeding, no guarantee query, no database session insert.
-       Works even on a cold Render instance or a fully reset database. */
+    /* ── 1) Principal administrator : INSTANT synchronous in-memory bypass ──
+       Verified against the hardcoded in-memory registry FIRST (zero storage
+       access), the admin account is (re)created on the fly in the local
+       storage, then an in-memory session is issued — no waiting, no timeout.
+       Works even on a cold Render instance or a fully reset local database. */
     if (email && isPrincipalAdminEmail(email)) {
       if (!verifyAdmin(email, password)) {
         return Response.json({ ok: false, error: "invalid" }, { status: 401 });
       }
+      // Re-create the hardcoded admin account on the fly if storage was reset.
+      // Fire-and-forget: never delays the response.
+      void guaranteePrincipalAdmin();
       await createSession("admin", null); // memory-only, ~0 ms
       return Response.json({ ok: true, role: "admin" });
     }

@@ -1,10 +1,11 @@
 {
-  "name": "nextjs-postgresql-template",
+  "name": "scolaria",
   "private": true,
   "scripts": {
     "dev": "next dev",
     "build": "next build",
-    "start": "next start",
+    "start": "node server.js",
+    "start:next": "next start -H 0.0.0.0 -p ${PORT:-10000}",
     "lint": "eslint .",
     "typecheck": "tsc --noEmit"
   },
@@ -29,5 +30,8 @@
     "postcss": "8.5.8",
     "tailwindcss": "4.1.17",
     "typescript": "5.9.3"
+  },
+  "engines": {
+    "node": ">=20.9.0"
   }
 }
