@@ -8,12 +8,12 @@ import type { StudentRow } from "@/lib/types";
 import { Icon, WaIcon, Modal, StatCard, EmptyState, DocPreview, Field } from "@/components/ui";
 import { PaymentModal } from "@/components/students";
 
-export function CashView() {
+export function CashView({ initialBlock = null }: { initialBlock?: Block | null }) {
   const { data } = useApp();
   const { t, locale } = useI18n();
   const [from, setFrom] = useState("");
   const [to, setTo] = useState("");
-  const [blockFilter, setBlockFilter] = useState<"all" | Block>("all");
+  const [blockFilter, setBlockFilter] = useState<"all" | Block>(initialBlock ?? "all");
   const [classFilter, setClassFilter] = useState("all");
   const [method, setMethod] = useState("all");
   const [q, setQ] = useState("");
@@ -170,7 +170,7 @@ export function CashView() {
                   if (!cls || cls.block !== next) setClassFilter("all");
                 }
               }}
-                title={!paid ? t("blk.forbidden") : undefined}
+                title={!paid ? t("nav.moduleLocked") : undefined}
                 className={`chip transition-all border ${!paid
                   ? "bg-gray-200/80 text-gray-500 border-gray-300 opacity-60 grayscale cursor-not-allowed"
                   : blockFilter === b

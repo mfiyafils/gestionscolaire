@@ -26,6 +26,21 @@ function normalizeStructures(rawStructures: unknown, rawLegacy?: unknown): strin
   const list = parseStructures(Array.isArray(input) ? (input as string[]) : String(input ?? ""));
   return serializeStructures(list);
 }
+
+/** Provision the standard classes of every purchased structure (idempotent). */
+async function provisionStandardClasses(tenantId: string, structures: string[]) {
+  for (const raw of structures) {
+    const block = raw as Block;
+    if (!STRUCTURE[block]) continue;
+    const tuition = block === "nursery" ? 20000 : block === "primary" ? 25000 : 35000;
+    for (const level of STRUCTURE[block].levels) {
+      await db
+        .insert(classes)
+        .values({ tenantId, block, levelCode: level.code, variant: "general", tuition })
+        .onConflictDoNothing();
+    }
+  }
+}
 function summaryStructure(csv: string): string {
   const list = parseStructures(csv);
   return list.length === BLOCKS.length ? "all" : list[0];
@@ -97,11 +112,12 @@ export async function POST(req: Request) {
         const password = genPassword();
         const plan = PLANS.some((x) => x.id === p.plan) ? String(p.plan) : "monthly";
         const csv = normalizeStructures(p.structures, p.structure);
-        await db.insert(tenants).values({
+        const [created] = await db.insert(tenants).values({
           name, email, phone: str(p.phone, 30), passwordHash: hashPassword(password),
           plan, structure: summaryStructure(csv), structures: csv, createdByAdmin: true,
           status: "active", subscriptionEndsAt: planEnd(plan),
-        });
+        }).returning();
+        await provisionStandardClasses(created.id, parseStructures(csv));
         result = { password, email };
       }
 
@@ -157,17 +173,19 @@ export async function POST(req: Request) {
         const exists = await db.select({ id: tenants.id, structures: tenants.structures }).from(tenants).where(eq(tenants.email, email)).limit(1);
         if (!exists[0]) {
           const password = genPassword();
-          await db.insert(tenants).values({
+          const [created] = await db.insert(tenants).values({
             name: rq.schoolName, email, phone: rq.phone, passwordHash: hashPassword(password),
             plan: rq.plan, structure: summaryStructure(csv), structures: csv, createdByAdmin: false,
             status: "active", subscriptionEndsAt: planEnd(rq.plan),
-          });
+          }).returning();
+          await provisionStandardClasses(created.id, parseStructures(csv));
           return { password, email, phone: rq.phone, schoolName: rq.schoolName };
         }
         const merged = serializeStructures([...new Set([...parseStructures(exists[0].structures), ...parseStructures(csv)])]);
         await db.update(tenants).set({
           status: "active", plan: rq.plan, structure: summaryStructure(merged), structures: merged, subscriptionEndsAt: planEnd(rq.plan),
         }).where(eq(tenants.email, email));
+        await provisionStandardClasses(exists[0].id, parseStructures(merged));
         return { email, existing: true };
       };
 

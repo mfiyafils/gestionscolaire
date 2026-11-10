@@ -429,11 +429,14 @@ export function EnrollView({ onNavigate }: { onNavigate: (v: string) => void }) 
 /* ═════════ Register view ═════════ */
 type ViewChip = "all" | "unpaid" | "girls" | "boys" | "recent";
 
-export function RegisterView({ onNavigate }: { onNavigate: (v: string) => void }) {
+export function RegisterView({ onNavigate, initialBlock = null }: {
+  onNavigate: (v: string, block?: Block | null) => void;
+  initialBlock?: Block | null;
+}) {
   const { data, act, toast } = useApp();
   const { t, locale } = useI18n();
   const [q, setQ] = useState("");
-  const [blockFilter, setBlockFilter] = useState<"all" | Block>("all");
+  const [blockFilter, setBlockFilter] = useState<"all" | Block>(initialBlock ?? "all");
   const [classFilter, setClassFilter] = useState("all");
   const [chip, setChip] = useState<ViewChip>("all");
   const [sort, setSort] = useState("recent");
@@ -635,7 +638,7 @@ export function RegisterView({ onNavigate }: { onNavigate: (v: string) => void }
             const paid = visibleBlocks.includes(b);
             return (
               <button type="button" key={b} disabled={!paid} onClick={() => paid && pickBlock(blockFilter === b ? "all" : b)}
-                title={!paid ? t("blk.forbidden") : undefined}
+                title={!paid ? t("nav.moduleLocked") : undefined}
                 className={`chip transition-all border ${!paid
                   ? "bg-gray-200/80 text-gray-500 border-gray-300 opacity-60 grayscale cursor-not-allowed"
                   : blockFilter === b

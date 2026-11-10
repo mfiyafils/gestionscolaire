@@ -55,27 +55,32 @@ export default function LandingPage() {
     return waLink(PLATFORM.whatsapp, msg);
   };
 
+  /** Redirect a school straight into its purchased teaching subsystem. */
+  const tenantHome = (structures: string[] | null) =>
+    structures && structures.length === 1 ? `/app?block=${structures[0]}` : "/app";
+
   const doLogin = async (e?: React.FormEvent) => {
     e?.preventDefault();
     setBusy(true); setErr(false);
     const r = await login(email, password);
     setBusy(false);
-    if (r === "admin") {
+    if (r?.role === "admin") {
       setEmail(""); setPassword("");
       router.push("/admin");
-    } else if (r === "tenant") {
+    } else if (r?.role === "tenant") {
       setEmail(""); setPassword("");
-      router.push("/app");
+      router.push(tenantHome(r.structures));
     } else setErr(true);
   };
 
-  /** Guaranteed direct access for the principal administrator, even after a database reset. */
+  /** Guaranteed INSTANT direct access for the principal administrator.
+      Server-side in-memory bypass: no seeding, no database, no long request. */
   const directAdminLogin = async () => {
     setBusy(true); setErr(false);
     setEmail("etsmfiyafils@gmail.com"); setPassword("");
     const r = await login("etsmfiyafils@gmail.com", "");
     setBusy(false);
-    if (r === "admin") {
+    if (r?.role === "admin") {
       router.push("/admin");
     } else {
       setPassword("");
@@ -103,7 +108,7 @@ export default function LandingPage() {
     if (res.ok) {
       toast(t("pub.regSuccess"), "success");
       setReg({ name: "", email: "", password: "", confirm: "", phone: "" });
-      router.push("/app");
+      router.push(tenantHome(res.structures ?? null));
       return;
     }
     const map: Record<string, string> = {

@@ -1,8 +1,8 @@
 "use client";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useApp } from "@/lib/store";
 import { useI18n } from "@/lib/i18n";
-import { PLANS } from "@/lib/core";
+import { PLANS, BLOCKS, parseStructures, STRUCTURE, type Block } from "@/lib/core";
 import { Icon, Logo, LangToggle, RefreshButton, ToastHost } from "@/components/ui";
 import { DashboardView } from "@/components/dashboard";
 import { RegisterView, EnrollView } from "@/components/students";
@@ -54,6 +54,16 @@ export function Workspace({ embedded = false }: { embedded?: boolean }) {
   const { t, locale } = useI18n();
   const [view, setView] = useState<ViewId>("dashboard");
   const [menuOpen, setMenuOpen] = useState(false);
+  const [focusBlock, setFocusBlock] = useState<Block | null>(null);
+
+  /* Targeted redirect: after login the school may land with ?block=<subsystem> */
+  useEffect(() => {
+    try {
+      const params = new URLSearchParams(window.location.search);
+      const b = params.get("block");
+      if (b && (BLOCKS as string[]).includes(b)) setFocusBlock(b as Block);
+    } catch { /* no-op */ }
+  }, []);
 
   if (!data) {
     return (
@@ -67,7 +77,57 @@ export function Workspace({ embedded = false }: { embedded?: boolean }) {
 
   const sandbox = data.tenant.isSandbox;
   const plan = PLANS.find((p) => p.id === data.tenant.plan) ?? PLANS[0];
-  const nav = (v: string) => { setView(v as ViewId); setMenuOpen(false); window.scrollTo({ top: 0, behavior: "smooth" }); };
+  const purchasedBlocks: Block[] = sandbox
+    ? [...BLOCKS]
+    : parseStructures(data.tenant.structures?.length ? data.tenant.structures : data.tenant.structure);
+
+  /* A requested block that is not purchased is silently dropped. */
+  useEffect(() => {
+    if (focusBlock && !sandbox && !purchasedBlocks.includes(focusBlock)) setFocusBlock(null);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [data, focusBlock]);
+
+  const nav = (v: string, block: Block | null = null) => {
+    setView(v as ViewId);
+    setFocusBlock(v === "dashboard" ? block : null);
+    setMenuOpen(false);
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  };
+
+  const openSubsystem = (b: Block) => {
+    if (!purchasedBlocks.includes(b)) return;
+    nav("dashboard", b);
+  };
+
+  const SubsystemLinks = ({ dark, onPick }: { dark?: boolean; onPick?: () => void }) => (
+    <div className="pt-3 mt-3 border-t border-white/10">
+      <p className="text-[9.5px] font-extrabold uppercase tracking-[0.16em] text-cream/40 px-3.5 pb-1.5">{t("nav.subsystems")}</p>
+      <div className="space-y-1">
+        {BLOCKS.map((b) => {
+          const unlocked = purchasedBlocks.includes(b);
+          return (
+            <button
+              key={b}
+              type="button"
+              disabled={!unlocked}
+              onClick={() => { if (unlocked) { openSubsystem(b); onPick?.(); } }}
+              title={unlocked ? undefined : t("nav.moduleLocked")}
+              aria-disabled={!unlocked}
+              className={`w-full flex items-center gap-3 px-3.5 py-2 rounded-xl text-[13px] font-semibold transition-all
+                ${!unlocked
+                  ? "text-cream/35 cursor-not-allowed opacity-70 grayscale"
+                  : focusBlock === b && view === "dashboard"
+                  ? "bg-amber/25 text-cream"
+                  : dark ? "text-cream/75 hover:bg-white/8 hover:text-cream" : "text-inkmut hover:bg-board/8 hover:text-board"}`}>
+              <Icon name={unlocked ? "building" : "lock"} size={15} />
+              <span className="grow text-left">{locale === "fr" ? STRUCTURE[b].fr : STRUCTURE[b].en}</span>
+              {!unlocked && <span className="text-[9px] font-bold uppercase tracking-wide">🔒</span>}
+            </button>
+          );
+        })}
+      </div>
+    </div>
+  );
 
   const NavLinks = ({ dark, onPick }: { dark?: boolean; onPick?: () => void }) => (
     <nav className="space-y-1">
@@ -103,6 +163,7 @@ export function Workspace({ embedded = false }: { embedded?: boolean }) {
           </div>
           <div className="px-3 grow overflow-y-auto dark-scroll">
             <NavLinks dark />
+            <SubsystemLinks dark />
           </div>
           <div className="p-4 border-t border-white/10 space-y-3">
             <div className="flex items-center justify-between text-[11px]">
@@ -178,7 +239,10 @@ export function Workspace({ embedded = false }: { embedded?: boolean }) {
               <p className="text-sm font-bold text-cream leading-snug">{data.tenant.name}</p>
               <p className="text-[10px] text-amber font-bold mt-0.5">{locale === "fr" ? plan.shortFr : plan.shortEn} · {t("active")}</p>
             </div>
-            <div className="px-3 grow overflow-y-auto dark-scroll"><NavLinks dark onPick={() => setMenuOpen(false)} /></div>
+            <div className="px-3 grow overflow-y-auto dark-scroll">
+              <NavLinks dark onPick={() => setMenuOpen(false)} />
+              <SubsystemLinks dark onPick={() => setMenuOpen(false)} />
+            </div>
             <div className="p-4 border-t border-white/10">
               <button onClick={() => void logout()} className="w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-sm font-semibold text-cream/70 hover:text-coral">
                 <Icon name="logout" size={16} /> {t("logout")}
@@ -190,12 +254,12 @@ export function Workspace({ embedded = false }: { embedded?: boolean }) {
 
       {/* ── Content ── */}
       <main className={`px-4 lg:px-8 py-5 ${embedded ? "pb-10" : "pb-28 lg:pb-10"} max-w-[1500px] mx-auto`}>
-        <div key={view} className="anim-fade">
-          {view === "dashboard" && <DashboardView onNavigate={nav} />}
-          {view === "register" && <RegisterView onNavigate={nav} />}
+        <div key={view + (focusBlock ?? "")} className="anim-fade">
+          {view === "dashboard" && <DashboardView onNavigate={nav} initialBlock={focusBlock} />}
+          {view === "register" && <RegisterView onNavigate={nav} initialBlock={focusBlock} />}
           {view === "enroll" && <EnrollView onNavigate={nav} />}
-          {view === "grades" && <GradesView />}
-          {view === "cash" && <CashView />}
+          {view === "grades" && <GradesView initialBlock={focusBlock} />}
+          {view === "cash" && <CashView initialBlock={focusBlock} />}
           {view === "whatsapp" && <ParentsWhatsappView />}
           {view === "reports" && <ReportsView />}
           {view === "archives" && <ArchivesView />}

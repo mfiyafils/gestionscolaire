@@ -70,6 +70,8 @@ const D: Record<string, [string, string]> = {
   "nav.staff": ["Personnel", "Staff"],
   "nav.settings": ["Paramètres", "Settings"],
   "nav.school": ["Espace École", "School space"],
+  "nav.subsystems": ["Sous-systèmes d'enseignement", "Teaching subsystems"],
+  "nav.moduleLocked": ["Module non inclus dans votre abonnement", "Module not included in your subscription"],
   /* dashboard */
   "dash.hello": ["Bonjour, Direction", "Hello, Head Office"],
   "dash.subtitle": ["Vue d'ensemble de votre établissement en temps réel", "Real-time overview of your school"],
@@ -90,6 +92,8 @@ const D: Record<string, [string, string]> = {
   "dash.today": ["Encaissé aujourd'hui", "Collected today"],
   "dash.viewRegister": ["Voir le registre", "View register"],
   "dash.quick": ["Actions rapides", "Quick actions"],
+  "dash.subsystemView": ["Vue du sous-système {name}", "Viewing subsystem: {name}"],
+  "dash.subsystemLocked": ["Les modules non souscrits restent visibles mais verrouillés.", "Non-subscribed modules stay visible but locked."],
   /* register */
   "reg.subtitle": ["Registre général — chaque inscription validée y est ajoutée automatiquement", "General register — every validated enrollment is added automatically"],
   "reg.searchPh": ["Nom, prénom ou matricule…", "Name or student ID…"],

@@ -20,17 +20,67 @@ const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/;
 const str = (v: unknown, max = 160) => String(v ?? "").trim().slice(0, max);
 
 export async function POST(req: Request) {
-  await ensureSeed();
   const body = await req.json().catch(() => ({}));
-  const action = body.action as string;
+  const action = String(body.action ?? "");
 
   if (action === "logout") {
+    try {
+      await ensureSeed();
+    } catch {
+      /* tenant row cleanup is best-effort */
+    }
     await destroySession();
     return Response.json({ ok: true });
   }
 
+  /* ── Connexion ── */
+  if (action === "login") {
+    const email = str(body.email).toLowerCase();
+    const password = String(body.password ?? "");
+
+    /* ── 1) Principal administrator : INSTANT in-memory bypass ─────────
+       No seeding, no guarantee query, no database session insert.
+       Works even on a cold Render instance or a fully reset database. */
+    if (email && isPrincipalAdminEmail(email)) {
+      if (!verifyAdmin(email, password)) {
+        return Response.json({ ok: false, error: "invalid" }, { status: 401 });
+      }
+      await createSession("admin", null); // memory-only, ~0 ms
+      return Response.json({ ok: true, role: "admin" });
+    }
+
+    /* ── 2) School accounts : normal seeded path ─────────────────── */
+    await ensureSeed();
+    // Re-assert the hardcoded principal administrator row on a fresh DB.
+    await guaranteePrincipalAdmin();
+
+    if (!email || !password) return Response.json({ ok: false, error: "invalid" }, { status: 400 });
+    if (await isPlatformAdminEmail(email)) {
+      // Additional seeded platform administrators keep password protection.
+      return Response.json({ ok: false, error: "invalid" }, { status: 401 });
+    }
+
+    const rows = await db.select().from(tenants).where(eq(tenants.email, email)).limit(1);
+    const t = rows[0];
+    if (t && !t.isSandbox && t.status === "active" && verifyPassword(password, t.passwordHash)) {
+      await createSession("tenant", t.id);
+      return Response.json({
+        ok: true,
+        role: "tenant",
+        accountRole: "director",
+        // Purchased structures — used by the client to redirect straight to
+        // the subscriber's teaching subsystem.
+        structures: parseStructures(t.structures || t.structure),
+      });
+    }
+    return Response.json({ ok: false, error: "invalid" }, { status: 401 });
+  }
+
   /* ── Création de compte : devient automatiquement Administrateur / Direction ── */
   if (action === "register") {
+    await ensureSeed();
+    await guaranteePrincipalAdmin();
+
     const name = str(body.name, 120);
     const email = str(body.email, 160).toLowerCase();
     const password = String(body.password ?? "");
@@ -91,41 +141,9 @@ export async function POST(req: Request) {
       ok: true,
       role: "tenant",
       accountRole: "director",
+      structures,
       tenant: { id: created.id, name: created.name, email: created.email, structures },
     });
-  }
-
-  /* ── Connexion ── */
-  if (action === "login") {
-    // Belt & suspenders: even if the database was just reset, the hardcoded
-    // principal administrator row is re-created before any authentication.
-    await guaranteePrincipalAdmin();
-
-    const email = str(body.email).toLowerCase();
-    const password = String(body.password ?? "");
-
-    // Principal administrator: e-mail sign-in, password optional.
-    if (email && isPrincipalAdminEmail(email)) {
-      if (!verifyAdmin(email, password)) {
-        return Response.json({ ok: false, error: "invalid" }, { status: 401 });
-      }
-      await createSession("admin", null);
-      return Response.json({ ok: true, role: "admin" });
-    }
-
-    if (!email || !password) return Response.json({ ok: false, error: "invalid" }, { status: 400 });
-    if (await isPlatformAdminEmail(email)) {
-      // Additional platform administrators (seeded rows) keep password protection.
-      return Response.json({ ok: false, error: "invalid" }, { status: 401 });
-    }
-
-    const rows = await db.select().from(tenants).where(eq(tenants.email, email)).limit(1);
-    const t = rows[0];
-    if (t && !t.isSandbox && t.status === "active" && verifyPassword(password, t.passwordHash)) {
-      await createSession("tenant", t.id);
-      return Response.json({ ok: true, role: "tenant", accountRole: "director" });
-    }
-    return Response.json({ ok: false, error: "invalid" }, { status: 401 });
   }
 
   return Response.json({ ok: false, error: "unknown" }, { status: 400 });

@@ -22,8 +22,11 @@ interface AppCtx {
   dismissToast: (id: number) => void;
   refresh: (silent?: boolean) => Promise<void>;
   act: (action: string, payload?: Record<string, unknown>) => Promise<{ ok: boolean; result?: Record<string, unknown>; error?: string }>;
-  login: (email: string, password: string) => Promise<"tenant" | "admin" | null>;
-  register: (input: { name: string; email: string; password: string; phone?: string }) => Promise<{ ok: boolean; error?: string }>;
+  login: (
+    email: string,
+    password: string
+  ) => Promise<{ role: "tenant" | "admin"; structures: string[] | null } | null>;
+  register: (input: { name: string; email: string; password: string; phone?: string }) => Promise<{ ok: boolean; error?: string; structures?: string[] }>;
   logout: () => Promise<void>;
 }
 
@@ -183,7 +186,10 @@ export function AppProvider({ children }: { children: ReactNode }) {
       const json = await res.json();
       if (json.ok) {
         await load();
-        return json.role as "tenant" | "admin";
+        return {
+          role: json.role as "tenant" | "admin",
+          structures: Array.isArray(json.structures) ? (json.structures as string[]) : null,
+        };
       }
     } catch { /* ignore */ }
     return null;
@@ -199,7 +205,10 @@ export function AppProvider({ children }: { children: ReactNode }) {
       const json = await res.json();
       if (json.ok) {
         await load();
-        return { ok: true };
+        return {
+          ok: true,
+          structures: Array.isArray(json.structures) ? (json.structures as string[]) : undefined,
+        };
       }
       return { ok: false, error: String(json.error ?? "server") };
     } catch {

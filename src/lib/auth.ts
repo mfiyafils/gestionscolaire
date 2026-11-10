@@ -9,6 +9,28 @@ const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || "admin2026";
 const WEEK = 7 * 24 * 3600;
 const ADMIN_TTL = 2 * 3600; // 2 hours max for admin sessions
 
+/**
+ * In-memory administrator sessions (256-bit random tokens, httpOnly cookie).
+ * The principal administrator signs in INSTANTLY — no database round-trip,
+ * no seeding, no external network call — so access is guaranteed even on a
+ * cold / reset / in-memory Render instance. Tokens live in server memory and
+ * are pruned on expiry.
+ */
+const adminMemorySessions = new Map<string, number>();
+const ADMIN_SESSION_LIMIT = 100;
+
+function pruneAdminSessions() {
+  const now = Date.now();
+  for (const [token, expires] of adminMemorySessions) {
+    if (expires <= now) adminMemorySessions.delete(token);
+  }
+  while (adminMemorySessions.size > ADMIN_SESSION_LIMIT) {
+    const oldest = adminMemorySessions.keys().next().value;
+    if (oldest === undefined) break;
+    adminMemorySessions.delete(oldest);
+  }
+}
+
 export function hashPassword(pw: string): string {
   const salt = randomBytes(16).toString("hex");
   const hash = scryptSync(pw, salt, 64).toString("hex");
@@ -69,13 +91,20 @@ export function genPassword(): string {
 
 export async function createSession(role: "tenant" | "admin", tenantId: string | null) {
   const token = randomBytes(32).toString("hex");
-  const ttl = role === "admin" ? ADMIN_TTL : WEEK;
-  await db.insert(sessions).values({
-    token,
-    role,
-    tenantId,
-    expiresAt: new Date(Date.now() + ttl * 1000),
-  });
+
+  if (role === "admin") {
+    // Instant in-memory admin session — zero database access.
+    pruneAdminSessions();
+    adminMemorySessions.set(token, Date.now() + ADMIN_TTL * 1000);
+  } else {
+    await db.insert(sessions).values({
+      token,
+      role,
+      tenantId,
+      expiresAt: new Date(Date.now() + WEEK * 1000),
+    });
+  }
+
   const jar = await cookies();
   jar.set(SESSION_COOKIE, token, {
     httpOnly: true,
@@ -90,7 +119,17 @@ export async function createSession(role: "tenant" | "admin", tenantId: string |
 export async function destroySession() {
   const jar = await cookies();
   const token = jar.get(SESSION_COOKIE)?.value;
-  if (token) await db.delete(sessions).where(eq(sessions.token, token));
+  if (token) {
+    if (adminMemorySessions.has(token)) {
+      adminMemorySessions.delete(token); // memory-only admin session: instant
+    } else {
+      try {
+        await db.delete(sessions).where(eq(sessions.token, token));
+      } catch {
+        /* tenant session row may not exist (e.g. in-memory fallback) */
+      }
+    }
+  }
   jar.set(SESSION_COOKIE, "", { httpOnly: true, path: "/", maxAge: 0 });
 }
 
@@ -104,6 +143,18 @@ export async function getSession(): Promise<Session | null> {
   const jar = await cookies();
   const token = jar.get(SESSION_COOKIE)?.value;
   if (!token) return null;
+
+  // 1) In-memory administrator session — answered without any database access.
+  const adminExpiry = adminMemorySessions.get(token);
+  if (adminExpiry !== undefined) {
+    if (adminExpiry <= Date.now()) {
+      adminMemorySessions.delete(token);
+      return null;
+    }
+    return { role: "admin", tenantId: null };
+  }
+
+  // 2) Persisted tenant sessions.
   const rows = await db
     .select()
     .from(sessions)

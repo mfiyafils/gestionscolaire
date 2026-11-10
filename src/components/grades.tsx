@@ -8,10 +8,10 @@ import { Icon, Badge, EmptyState, DocPreview, Seg, Confirm, Field } from "@/comp
 import { BulletinModal } from "@/components/bulletin";
 import { ClassCreateModal } from "@/components/students";
 
-export function GradesView() {
+export function GradesView({ initialBlock = null }: { initialBlock?: Block | null }) {
   const { data, act, toast } = useApp();
   const { t, locale } = useI18n();
-  const [blockFilter, setBlockFilter] = useState<"all" | Block>("all");
+  const [blockFilter, setBlockFilter] = useState<"all" | Block>(initialBlock ?? "all");
   const [classId, setClassId] = useState<string>("");
   const [term, setTerm] = useState<"1" | "2" | "3">("1");
   const [catalogPick, setCatalogPick] = useState("");
@@ -195,7 +195,7 @@ export function GradesView() {
             return (
               <button type="button" key={b} disabled={!paid}
                 onClick={() => { if (!paid) return; if (dirty.current.size > 0) void flush(Number(term)); setBlockFilter(blockFilter === b ? "all" : b); }}
-                title={!paid ? t("blk.forbidden") : undefined}
+                title={!paid ? t("nav.moduleLocked") : undefined}
                 className={`chip transition-all border ${!paid
                   ? "bg-gray-200/80 text-gray-500 border-gray-300 opacity-60 grayscale cursor-not-allowed"
                   : blockFilter === b

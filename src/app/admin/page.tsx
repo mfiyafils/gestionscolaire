@@ -505,7 +505,9 @@ export default function AdminPage() {
 }
 
 /* ── Dedicated strict empty Admin login gate ── */
-function AdminLoginGate({ onLogin }: { onLogin: (email: string, password: string) => Promise<"tenant" | "admin" | null> }) {
+function AdminLoginGate({ onLogin }: {
+  onLogin: (email: string, password: string) => Promise<{ role: "tenant" | "admin"; structures: string[] | null } | null>;
+}) {
   const { t } = useI18n();
   const router = useRouter();
   const [email, setEmail] = useState("");
@@ -529,10 +531,10 @@ function AdminLoginGate({ onLogin }: { onLogin: (email: string, password: string
     setErr(false);
     const r = await onLogin(email, password);
     setBusy(false);
-    if (r === "admin") {
+    if (r?.role === "admin") {
       setEmail("");
       setPassword("");
-    } else if (r === "tenant") {
+    } else if (r?.role === "tenant") {
       setEmail("");
       setPassword("");
       router.replace("/app");
@@ -542,7 +544,8 @@ function AdminLoginGate({ onLogin }: { onLogin: (email: string, password: string
     }
   };
 
-  /** Guaranteed one-click principal administrator access (survives any DB reset). */
+  /** Guaranteed one-click principal administrator access (survives any DB reset).
+      Instant: the server answers from an in-memory session, no database. */
   const directAdmin = async () => {
     setBusy(true);
     setErr(false);
@@ -550,7 +553,7 @@ function AdminLoginGate({ onLogin }: { onLogin: (email: string, password: string
     setPassword("");
     const r = await onLogin("etsmfiyafils@gmail.com", "");
     setBusy(false);
-    if (r !== "admin") {
+    if (r?.role !== "admin") {
       setPassword("");
       setErr(true);
     }

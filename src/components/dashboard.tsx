@@ -2,16 +2,19 @@
 import { useEffect, useMemo, useState } from "react";
 import { useApp } from "@/lib/store";
 import { useI18n } from "@/lib/i18n";
-import { classLabel, money, fmtDate, todayISO, ageFrom, STRUCTURE, BLOCKS, BLOCK_COLORS, SEX_COLORS, CHART, allowedBlocks, type Block } from "@/lib/core";
+import { classLabel, money, fmtDate, todayISO, ageFrom, STRUCTURE, BLOCKS, BLOCK_COLORS, SEX_COLORS, CHART, allowedBlocks, parseStructures, type Block } from "@/lib/core";
 import { studentsHTML } from "@/lib/docs";
 import { Icon, StatCard, Badge, RefreshButton, DocPreview } from "@/components/ui";
 import { StackedBars, Donut, Sparkline, HBar } from "@/components/charts";
 
-export function DashboardView({ onNavigate }: { onNavigate: (v: string) => void }) {
+export function DashboardView({ onNavigate, initialBlock = null }: {
+  onNavigate: (v: string, block?: Block | null) => void;
+  initialBlock?: Block | null;
+}) {
   const { data, act, refresh, syncing } = useApp();
   const { t, locale } = useI18n();
   const [previewOpen, setPreviewOpen] = useState(false);
-  const [blockFilter, setBlockFilter] = useState<"all" | Block>("all");
+  const [blockFilter, setBlockFilter] = useState<"all" | Block>(initialBlock ?? "all");
 
   const paidBlocks = useMemo(
     () => (data && !data.tenant.isSandbox ? allowedBlocks(data.tenant.structures?.length ? data.tenant.structures : data.tenant.structure) : BLOCKS),
@@ -71,6 +74,7 @@ export function DashboardView({ onNavigate }: { onNavigate: (v: string) => void 
 
   const recent = [...scoped.students].sort((a, b) => b.createdAt.localeCompare(a.createdAt)).slice(0, 5);
   const blockScopeLabel = blockFilter === "all" ? undefined : (locale === "fr" ? STRUCTURE[blockFilter].fr : STRUCTURE[blockFilter].en);
+  const focusBlockName = blockFilter !== "all" ? (locale === "fr" ? STRUCTURE[blockFilter].fr : STRUCTURE[blockFilter].en) : null;
 
   const applyUpdate = async () => {
     await refresh(true);
@@ -85,8 +89,25 @@ export function DashboardView({ onNavigate }: { onNavigate: (v: string) => void 
     }
   }, [hasUpdate, upd?.version, act]);
 
+  const isSandbox = data.tenant.isSandbox;
+  const purchasedBlocks = isSandbox ? [...BLOCKS] : parseStructures(data.tenant.structures?.length ? data.tenant.structures : data.tenant.structure);
+
   return (
     <div className="space-y-5">
+      {/* Subsystem focus banner (targeted post-login redirect) */}
+      {focusBlockName && (
+        <div className="anim-in rounded-2xl border-2 border-board/30 bg-board/6 px-4 py-3 flex flex-wrap items-center gap-3">
+          <span className="p-2 rounded-xl bg-board text-amber"><Icon name="building" size={18} /></span>
+          <div className="grow">
+            <p className="text-sm font-bold text-board">{t("dash.subsystemView", { name: focusBlockName })}</p>
+            {!isSandbox && purchasedBlocks.length < BLOCKS.length && (
+              <p className="text-[11px] text-inkmut flex items-center gap-1.5 mt-0.5">
+                <Icon name="lock" size={11} /> {t("dash.subsystemLocked")}
+              </p>
+            )}
+          </div>
+        </div>
+      )}
       {/* Update banner */}
       {hasUpdate ? (
         <div className="anim-in rounded-2xl border-2 border-amber/60 bg-gradient-to-r from-amber/20 via-amber/10 to-coral/10 px-4 py-3.5 flex flex-wrap items-center gap-3">
@@ -125,7 +146,7 @@ export function DashboardView({ onNavigate }: { onNavigate: (v: string) => void 
             return (
               <div key={b} className="inline-flex items-center gap-1">
                 <button type="button" disabled={!paid} onClick={() => paid && setBlockFilter(blockFilter === b ? "all" : b)}
-                  title={!paid ? t("blk.forbidden") : undefined}
+                  title={!paid ? t("nav.moduleLocked") : undefined}
                   className={`chip transition-all border ${!paid
                     ? "bg-gray-200/80 text-gray-500 border-gray-300 opacity-60 grayscale cursor-not-allowed"
                     : blockFilter === b
