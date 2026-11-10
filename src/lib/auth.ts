@@ -54,11 +54,6 @@ export function isPrincipalAdminEmail(email: string): boolean {
   return email.trim().toLowerCase() === ADMIN_EMAIL;
 }
 
-/** Synchronous in-memory check — works even when storage is empty/reset. */
-export function isPrincipalAdminInMemory(email: string): boolean {
-  return email.trim().toLowerCase() === ADMIN_EMAIL;
-}
-
 /**
  * Principal administrator authentication.
  * - The e-mail is the identity; an empty password is accepted for this account

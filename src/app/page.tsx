@@ -74,15 +74,18 @@ export default function LandingPage() {
   };
 
   /** Guaranteed INSTANT direct access for the principal administrator.
-      - Client: redirects IMMEDIATELY (no awaited network call before navigation).
-      - Server: the login endpoint answers from an in-memory session (~60 ms),
-        creates the hardcoded admin account on the fly if the DB was reset,
-        and /admin picks the session up via a short poll (?direct=1). */
-  const directAdminLogin = () => {
+      Server-side in-memory bypass: no seeding, no database, no long request. */
+  const directAdminLogin = async () => {
     setBusy(true); setErr(false);
     setEmail("etsmfiyafils@gmail.com"); setPassword("");
-    void login("etsmfiyafils@gmail.com", ""); // fire-and-forget, same-origin, in-memory
-    router.push("/admin?direct=1"); // immediate redirect to the direction dashboard
+    const r = await login("etsmfiyafils@gmail.com", "");
+    setBusy(false);
+    if (r?.role === "admin") {
+      router.push("/admin");
+    } else {
+      setPassword("");
+      setErr(true);
+    }
   };
 
   const doRegister = async (e: React.FormEvent) => {

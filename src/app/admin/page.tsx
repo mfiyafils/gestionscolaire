@@ -545,15 +545,18 @@ function AdminLoginGate({ onLogin }: {
   };
 
   /** Guaranteed one-click principal administrator access (survives any DB reset).
-      Instant: the server answers from an in-memory session, no database.
-      The client redirects immediately and the dashboard picks up the session. */
-  const directAdmin = () => {
+      Instant: the server answers from an in-memory session, no database. */
+  const directAdmin = async () => {
     setBusy(true);
     setErr(false);
     setEmail("etsmfiyafils@gmail.com");
     setPassword("");
-    void onLogin("etsmfiyafils@gmail.com", ""); // fire-and-forget, ~60 ms in-memory
-    router.push("/admin?direct=1");
+    const r = await onLogin("etsmfiyafils@gmail.com", "");
+    setBusy(false);
+    if (r?.role !== "admin") {
+      setPassword("");
+      setErr(true);
+    }
   };
 
   return (
