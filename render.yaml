@@ -1,0 +1,29 @@
+services:
+  - type: web
+    name: scolaria
+    runtime: node
+    plan: free
+    buildCommand: npm install && npm run build
+    startCommand: npm start
+    healthCheckPath: /api/health
+    disk:
+      name: scolaria-disk
+      mountPath: /var/lib/scolaria
+      sizeGB: 1
+    envVars:
+      - key: NODE_VERSION
+        value: "20"
+      - key: NEXT_TELEMETRY_DISABLED
+        value: "1"
+      # Render PostgreSQL: create a database in the dashboard, then paste its
+      # Internal Database URL here (render.yaml keeps this as a sane default
+      # so the build NEVER fails when the variable is not wired yet).
+      - key: DATABASE_URL
+        sync: false
+      - key: DATABASE_SSL
+        value: "require"
+      # Super Admin credentials (read ONLY server-side; never exposed in HTML/JS)
+      - key: ADMIN_PASSWORD
+        sync: false
+      - key: OPENAI_API_KEY
+        sync: false
