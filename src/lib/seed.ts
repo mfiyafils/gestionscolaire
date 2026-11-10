@@ -53,11 +53,30 @@ export async function ensureSeed(): Promise<void> {
 
 /**
  * Guarantees the hardcoded principal administrator (etsmfiyafils@gmail.com)
- * exists in the `platform_admins` table with administrator / director rights.
- * Idempotent and safe to call on EVERY server start, every request, and even
- * against an in-memory or temporarily reset database (SQLite / PGlite).
+ * exists with administrator / director rights — synchronously verifiable in
+ * memory (constant) and auto-created on the fly in the database.
+ *
+ * Called on EVERY server start and EVERY request path:
+ *  - ensureSeed() runs it on the first request of each cold start
+ *    (Render health check hits /api/health right after deploy → admin row
+ *    exists before any user request),
+ *  - the login route calls it before validating credentials, so even on an
+ *    empty / just-reset local database the admin account is re-created
+ *    on the fly before the login is accepted.
+ *
+ * Idempotent (ON CONFLICT DO NOTHING) and never throws.
  */
 export async function guaranteePrincipalAdmin(): Promise<void> {
+  // 1) Synchronous in-memory verification: the principal admin identity is a
+  //    hardcoded constant, so it is ALWAYS "present" regardless of storage.
+  const mem = inMemoryAdmins();
+  if (!mem.has(PRINCIPAL_ADMIN_EMAIL)) {
+    mem.add(PRINCIPAL_ADMIN_EMAIL);
+    console.info("[seed] principal administrator guaranteed in memory:", PRINCIPAL_ADMIN_EMAIL);
+  }
+
+  // 2) Best-effort persistence into whatever local storage is available
+  //    (PostgreSQL on Render, or embedded PGlite / memory fallback).
   try {
     await initDb();
     await db
@@ -65,10 +84,23 @@ export async function guaranteePrincipalAdmin(): Promise<void> {
       .values({ email: PRINCIPAL_ADMIN_EMAIL, label: "Administrateur principal", isPrincipal: true })
       .onConflictDoNothing({ target: platformAdmins.email });
   } catch (err) {
-    // Never block the server because of the admin row; the hardcoded check
-    // in verifyAdmin() already guarantees principal access by e-mail.
-    console.warn("[seed] platform admin row skipped:", (err as Error).message?.slice(0, 140));
+    // Never block the server because of the admin row; the in-memory
+    // verification above already guarantees principal access by e-mail.
+    console.warn("[seed] platform admin persistence skipped (storage unavailable):", (err as Error).message?.slice(0, 120));
   }
+}
+
+/** In-memory registry of hardcoded platform administrators (always seeded). */
+const MEMO_ADMINS_KEY = "__scolariaMemoAdmins";
+function inMemoryAdmins(): Set<string> {
+  const g = globalThis as typeof globalThis & { [MEMO_ADMINS_KEY]?: Set<string> };
+  if (!g[MEMO_ADMINS_KEY]) g[MEMO_ADMINS_KEY] = new Set([PRINCIPAL_ADMIN_EMAIL]);
+  return g[MEMO_ADMINS_KEY];
+}
+
+/** Synchronous check: is this e-mail a hardcoded platform administrator? */
+export function isMemoPrincipalAdmin(email: string): boolean {
+  return inMemoryAdmins().has(email.trim().toLowerCase());
 }
 
 /** Seeds the private platform administrator row (legacy alias, still idempotent). */
