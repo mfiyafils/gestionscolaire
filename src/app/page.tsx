@@ -1,536 +1,343 @@
-"use client";
-import { useState } from "react";
-import { useRouter } from "next/navigation";
-import { useApp } from "@/lib/store";
-import { useI18n } from "@/lib/i18n";
-import { PLANS, PLATFORM, STRUCTURE, BLOCKS, BLOCK_COLORS, VARIANTS, money, waLink, subscriptionPrice, structureLabel, type Block } from "@/lib/core";
-import { Icon, WaIcon, Logo, LangToggle, ToastHost, Field, CopyBtn, Badge } from "@/components/ui";
+import Link from "next/link";
+import { logout } from "@/actions/auth";
+import { AdminLoginForm, SchoolLoginForm } from "@/components/LoginForms";
+import { getSession } from "@/lib/auth";
+import {
+  APP_BRAND,
+  APP_CITY,
+  APP_NAME,
+  APP_PHONE,
+  APP_TAGLINE,
+  APP_URL,
+  DEFAULT_CLASSES,
+  LEVELS,
+  LEVEL_INFO,
+  ADMIN_WHATSAPP,
+  PAYMENT_HOLDER,
+  PAYMENT_NUMBERS,
+  PLANS,
+} from "@/lib/constants";
+import { formatNumber, whatsappUrl } from "@/lib/utils";
 
-export default function LandingPage() {
-  const { ready, role, login, register, act, toast } = useApp();
-  const { t, locale } = useI18n();
-  const router = useRouter();
+const ERROR_MESSAGES: Record<string, string> = {
+  connexion: "Veuillez vous connecter pour accéder à cet espace.",
+};
 
-  /* login */
-  const [email, setEmail] = useState("");
-  const [password, setPassword] = useState("");
-  const [err, setErr] = useState(false);
-  const [busy, setBusy] = useState(false);
+const FEATURES = [
+  {
+    title: "Inscription automatisée",
+    text: "Numéro officiel MAT-2026-001 attribué instantanément, registre + liste de classe alimentés en temps réel.",
+    color: "#173f2f",
+    icon: "M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2M9 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8zM19 8v6M22 11h-6",
+  },
+  {
+    title: "WhatsApp & reçus A6",
+    text: "Confirmation au parent par WhatsApp avec le lien du reçu A6 joint, imprimable ou enregistrable en PDF.",
+    color: "#2E9E6B",
+    icon: "M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z",
+  },
+  {
+    title: "Numéros officiels synchronisés",
+    text: "Le registre des numéros officiels et la liste générale des élèves partagent la même source : zéro écart.",
+    color: "#2E5FE8",
+    icon: "M4 6h16M4 12h16M4 18h7M15 18l2 2 4-4",
+  },
+  {
+    title: "Isolation multi-tenant",
+    text: "Aucune école ne voit une autre école. La Direction Générale gère les abonnements : ajouter, suspendre, réadmettre, retirer.",
+    color: "#C4327E",
+    icon: "M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z",
+  },
+];
 
-  /* registration */
-  const [authTab, setAuthTab] = useState<"login" | "register">("login");
-  const [reg, setReg] = useState({ name: "", email: "", password: "", confirm: "", phone: "" });
-  const [regErr, setRegErr] = useState<string | null>(null);
-  const [regBusy, setRegBusy] = useState(false);
-
-  /* subscription */
-  const [structures, setStructures] = useState<Block[]>(["nursery", "primary", "secondary"]);
-  const [planId, setPlanId] = useState("annual");
-  const [school, setSchool] = useState("");
-  const [phone, setPhone] = useState("");
-  const [mail, setMail] = useState("");
-  const [payMethod, setPayMethod] = useState<"orange" | "momo">("orange");
-  const [payRef, setPayRef] = useState("");
-  const [requestId, setRequestId] = useState<string | null>(null);
-  const [orderBusy, setOrderBusy] = useState(false);
-
-  const plan = PLANS.find((p) => p.id === planId) ?? PLANS[2];
-  const mult = structures.length;
-  const totalPrice = subscriptionPrice(plan.id, structures);
-
-  const toggleStruct = (b: Block) => {
-    setStructures((prev) => {
-      if (prev.includes(b)) return prev.length > 1 ? prev.filter((x) => x !== b) : prev;
-      return BLOCKS.filter((x) => prev.includes(x) || x === b);
-    });
-  };
-
-  const buildProofWaUrl = (refVal: string, methodVal: "orange" | "momo") => {
-    const sLabel = structureLabel(structures, locale);
-    const calc = mult > 1 ? `${money(plan.price)} × ${mult} = *${money(totalPrice)}*` : `*${money(totalPrice)}*`;
-    const methodTxt = methodVal === "orange" ? `Orange Money (${PLATFORM.orangeMoney})` : `MTN Mobile Money (${PLATFORM.mobileMoney})`;
-    const msg = locale === "fr"
-      ? `🎓 *Validation paiement Scolaria*\n\n🏫 École : ${school}\n🧱 Structures (${mult}) : ${sLabel}\n⏱ Durée : ${plan.fr}\n💰 Montant : ${calc}\n📱 WhatsApp : ${phone}\n📧 E-mail : ${mail || "—"}\n\n💳 Paiement effectué :\n• Canal : ${methodTxt}\n• Bénéficiaire : ${PLATFORM.payee}\n• Référence transaction : ${refVal.trim() || "(jointe ci-dessous)"}\n\n📸 *Je joins ma capture d'écran de transaction ci-dessous pour activation de mon compte.*`
-      : `🎓 *Scolaria payment confirmation*\n\n🏫 School: ${school}\n🧱 Structures (${mult}): ${sLabel}\n⏱ Duration: ${plan.en}\n💰 Amount: ${calc}\n📱 WhatsApp: ${phone}\n📧 Email: ${mail || "—"}\n\n💳 Payment completed:\n• Channel: ${methodTxt}\n• Recipient: ${PLATFORM.payee}\n• Transaction reference: ${refVal.trim() || "(attached below)"}\n\n📸 *I am attaching my transaction screenshot below to activate my account.*`;
-    return waLink(PLATFORM.whatsapp, msg);
-  };
-
-  /** Redirect a school straight into its purchased teaching subsystem. */
-  const tenantHome = (structures: string[] | null) =>
-    structures && structures.length === 1 ? `/app?block=${structures[0]}` : "/app";
-
-  const doLogin = async (e?: React.FormEvent) => {
-    e?.preventDefault();
-    setBusy(true); setErr(false);
-    const r = await login(email, password);
-    setBusy(false);
-    if (r?.role === "admin") {
-      setEmail(""); setPassword("");
-      router.push("/admin");
-    } else if (r?.role === "tenant") {
-      setEmail(""); setPassword("");
-      router.push(tenantHome(r.structures));
-    } else setErr(true);
-  };
-
-  /** Guaranteed INSTANT direct access for the principal administrator.
-      - Client: redirects IMMEDIATELY (no awaited network call before navigation).
-      - Server: the login endpoint answers from an in-memory session (~60 ms),
-        creates the hardcoded admin account on the fly if the DB was reset,
-        and /admin picks the session up via a short poll (?direct=1). */
-  const directAdminLogin = () => {
-    setBusy(true); setErr(false);
-    setEmail("etsmfiyafils@gmail.com"); setPassword("");
-    void login("etsmfiyafils@gmail.com", ""); // fire-and-forget, same-origin, in-memory
-    router.push("/admin?direct=1"); // immediate redirect to the direction dashboard
-  };
-
-  const doRegister = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setRegErr(null);
-    if (reg.name.trim().length < 2) { setRegErr(t("pub.regInvalidName")); return; }
-    if (!/^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(reg.email.trim())) { setRegErr(t("pub.regInvalidEmail")); return; }
-    if (reg.password.length < 6) { setRegErr(t("pub.regWeak")); return; }
-    if (reg.password !== reg.confirm) { setRegErr(t("pub.regMismatch")); return; }
-
-    setRegBusy(true);
-    const res = await register({
-      name: reg.name.trim(),
-      email: reg.email.trim().toLowerCase(),
-      password: reg.password,
-      phone: reg.phone.trim(),
-    });
-    setRegBusy(false);
-
-    if (res.ok) {
-      toast(t("pub.regSuccess"), "success");
-      setReg({ name: "", email: "", password: "", confirm: "", phone: "" });
-      router.push(tenantHome(res.structures ?? null));
-      return;
-    }
-    const map: Record<string, string> = {
-      emailTaken: t("pub.regTaken"),
-      reservedEmail: t("pub.regReserved"),
-      weakPassword: t("pub.regWeak"),
-      invalidEmail: t("pub.regInvalidEmail"),
-      invalidName: t("pub.regInvalidName"),
-    };
-    setRegErr(map[res.error ?? ""] ?? t("errorGeneric"));
-  };
-
-  const order = async () => {
-    if (!school.trim() || !phone.trim()) { toast(t("en.required"), "error"); return; }
-    setOrderBusy(true);
-    const res = await act("public.subscribe", {
-      schoolName: school, phone, email: mail, plan: planId, structures,
-      paymentMethod: payMethod, paymentRef: payRef,
-    });
-    setOrderBusy(false);
-    if (!res.ok) { toast(t("errorGeneric"), "error"); return; }
-    const rid = String(res.result?.requestId ?? "");
-    if (rid) setRequestId(rid);
-    toast(t("pub.requestSaved"), "success");
-  };
-
-  const saveProofRef = async () => {
-    if (!requestId) return;
-    setOrderBusy(true);
-    const res = await act("public.subscribe.proof", {
-      requestId, paymentMethod: payMethod, paymentRef: payRef,
-    });
-    setOrderBusy(false);
-    toast(res.ok ? t("pub.refSaved") : t("errorGeneric"), res.ok ? "success" : "error");
-  };
-
-  const proofWaUrl = requestId ? buildProofWaUrl(payRef, payMethod) : null;
+export default async function HomePage({
+  searchParams,
+}: {
+  searchParams: Promise<{ erreur?: string; info?: string }>;
+}) {
+  const sp = await searchParams;
+  const session = await getSession();
+  const notice = sp.erreur ? (ERROR_MESSAGES[sp.erreur] ?? sp.erreur) : sp.info;
 
   return (
-    <div className="min-h-dvh overflow-x-clip">
-      {/* ── Fixed header ── */}
-      <header className="fixed top-0 inset-x-0 z-50 bg-paper/85 backdrop-blur-md border-b border-line">
-        <div className="max-w-6xl mx-auto px-4 lg:px-6 h-16 flex items-center gap-3">
-          <Logo size={34} />
+    <main className="min-h-screen">
+      {/* En-tête fixe */}
+      <header className="fixed inset-x-0 top-0 z-50 border-b border-line bg-paper/85 backdrop-blur-md">
+        <div className="mx-auto flex h-16 max-w-6xl items-center gap-3 px-4 lg:px-6">
+          <span className="grid h-9 w-9 place-items-center rounded-xl bg-board text-amber shadow">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" className="h-5 w-5">
+              <path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20V2H6.5A2.5 2.5 0 0 0 4 4.5v15z" />
+            </svg>
+          </span>
           <div className="mr-2">
-            <p className="font-display font-black text-board text-lg leading-none">Scolaria</p>
-            <p className="text-[9px] font-bold tracking-[0.2em] text-amber-2 uppercase">MFIYA & Fils</p>
+            <p className="font-display text-lg font-black leading-none text-board">{APP_NAME}</p>
+            <p className="text-[9px] font-bold uppercase tracking-[0.2em] text-amber-2">{APP_BRAND}</p>
           </div>
-          <nav className="hidden md:flex items-center gap-5 text-sm font-semibold text-inkmut ml-4">
-            <a href="#structure" className="hover:text-board transition-colors">{t("pub.structureTitle")}</a>
-            <a href="#pricing" className="hover:text-board transition-colors">{t("se.subscription")}</a>
-            <a href="#payment" className="hover:text-board transition-colors">{t("pub.payNumbers")}</a>
+          <nav className="ml-4 hidden items-center gap-5 text-sm font-semibold text-inkmut md:flex">
+            <a href="#structure" className="transition-colors hover:text-board">
+              Une architecture par blocs
+            </a>
+            <a href="#pricing" className="transition-colors hover:text-board">
+              Abonnement {APP_NAME}
+            </a>
+            <a href="#payment" className="transition-colors hover:text-board">
+              Numéros de paiement
+            </a>
           </nav>
           <div className="ml-auto flex items-center gap-2">
-            <LangToggle />
-            {ready && role === "tenant" ? (
-              <button type="button" className="btn btn-primary btn-sm" onClick={() => router.push("/app")}>
-                <Icon name="chevR" size={14} /> {t("pub.enterApp")}
-              </button>
-            ) : (
-              <a href="#login" className="btn btn-primary btn-sm"><Icon name="key" size={14} /> {t("login")}</a>
-            )}
+            <div className="inline-flex items-center gap-0.5 rounded-xl border border-line bg-board/8 p-0.5" title="Français / English">
+              <span className="rounded-[9px] bg-amber px-2 py-1 text-[11px] font-extrabold uppercase tracking-wide text-board-2 shadow">fr</span>
+              <span className="px-2 py-1 text-[11px] font-extrabold uppercase tracking-wide text-inkmut">en</span>
+            </div>
+            <a href="#login" className="btn-primary btn-sm">
+              Connexion
+            </a>
           </div>
         </div>
       </header>
 
-      {/* ── Hero ── */}
-      <section className="relative pt-28 lg:pt-32 pb-14 px-4 lg:px-6">
-        {/* floating doodles */}
-        <svg className="absolute top-24 left-[6%] w-10 h-10 text-amber anim-float hidden md:block" style={{ "--rot": "-12deg" } as React.CSSProperties} viewBox="0 0 24 24" fill="currentColor"><path d="m12 2 3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01z" /></svg>
-        <svg className="absolute bottom-16 left-[42%] w-8 h-8 text-coral/70 anim-float hidden lg:block" style={{ "--rot": "18deg", animationDelay: "1.2s" } as React.CSSProperties} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5z" /></svg>
-        <svg className="absolute top-40 right-[4%] w-12 h-12 text-teal/60 anim-float hidden lg:block" style={{ "--rot": "8deg", animationDelay: "0.6s" } as React.CSSProperties} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20V2H6.5A2.5 2.5 0 0 0 4 4.5v15z" /></svg>
+      {/* Héros + connexion */}
+      <section className="relative px-4 pb-14 pt-28 lg:px-6 lg:pt-32">
+        <svg className="anim-float pointer-events-none absolute left-[6%] top-28 h-10 w-10 text-amber/50" style={{ ["--rot" as string]: "-12deg" }} viewBox="0 0 24 24" fill="currentColor">
+          <path d="m12 2 3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01z" />
+        </svg>
+        <svg className="anim-float pointer-events-none absolute right-[8%] top-24 h-9 w-9 text-coral/50" style={{ ["--rot" as string]: "18deg", animationDelay: "1.2s" }} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+          <path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5z" />
+        </svg>
+        <svg className="anim-float pointer-events-none absolute bottom-10 left-[45%] h-9 w-9 text-board/30" style={{ ["--rot" as string]: "8deg", animationDelay: "0.6s" }} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+          <path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20V2H6.5A2.5 2.5 0 0 0 4 4.5v15z" />
+        </svg>
 
-        <div className="max-w-6xl mx-auto grid grid-cols-1 lg:grid-cols-[1.15fr_1fr] gap-10 items-center">
-          <div className="stagger">
-            <span className="chip bg-board/8 text-board border border-board/15">
-              <Icon name="spark" size={12} className="text-amber-2" /> {t("pub.kicker")}
-            </span>
-            <h1 className="font-display font-black text-board text-[2.5rem] leading-[1.05] sm:text-6xl mt-4">
-              {t("pub.heroTitle")}<br />
+        <div className="mx-auto grid max-w-6xl grid-cols-1 items-center gap-10 lg:grid-cols-[1.15fr_1fr]">
+          <div className="anim-in">
+            <span className="chip border border-board/15 bg-board/8 text-board">📍 {APP_TAGLINE}</span>
+            <h1 className="mt-4 font-display text-[2.5rem] font-black leading-[1.05] text-board sm:text-6xl">
+              Votre école, pilotée
+              <br />
               <span className="relative inline-block text-coral">
-                {t("pub.heroTitle2")}
-                <svg className="absolute -bottom-2 left-0 w-full" height="10" viewBox="0 0 300 10" preserveAspectRatio="none"><path d="M2 7 Q75 1 150 6 T298 4" fill="none" stroke="#E9A23B" strokeWidth="4" strokeLinecap="round" /></svg>
+                à la craie et au cloud.
+                <svg className="absolute -bottom-1 left-0 w-full" height="10" viewBox="0 0 300 10" preserveAspectRatio="none">
+                  <path d="M2 7 Q75 1 150 6 T298 4" fill="none" stroke="#E9A23B" strokeWidth="4" strokeLinecap="round" />
+                </svg>
               </span>
             </h1>
-            <p className="text-inkmut text-base sm:text-lg leading-relaxed mt-5 max-w-xl">{t("pub.heroMsg")}</p>
-            <div className="flex flex-wrap gap-3 mt-7">
-              <a href="#pricing" className="btn btn-amber text-base px-6 py-3.5"><WaIcon size={18} /> {t("pub.order")}</a>
-              <a href="#structure" className="btn btn-ghost text-base px-6 py-3.5">{t("pub.structureTitle")}</a>
+            <p className="mt-5 max-w-xl text-base leading-relaxed text-inkmut sm:text-lg">
+              Inscriptions, numéros officiels, tranches de scolarité, caisse et reçus A6 envoyés par WhatsApp — chaque
+              établissement dans son coffre-fort isolé.
+            </p>
+            <div className="mt-7 flex flex-wrap gap-3">
+              <Link href="/inscription" className="btn-school px-6 py-3.5 text-base">
+                ✅ Valider la demande &amp; préparer l&apos;envoi WhatsApp
+              </Link>
+              <a href="#structure" className="btn-secondary px-6 py-3.5 text-base">
+                Une architecture par blocs
+              </a>
             </div>
-            <div className="flex flex-wrap gap-2 mt-7">
-              <Badge tone="green"><Icon name="shield" size={11} /> {t("pub.f3t")}</Badge>
-              <Badge tone="blue"><Icon name="globe" size={11} /> FR / EN</Badge>
-              <Badge tone="amber"><Icon name="printer" size={11} /> A6 ×4 / A4</Badge>
-              <Badge tone="magenta"><Icon name="phone" size={11} /> WhatsApp</Badge>
+            <div className="mt-7 flex flex-wrap gap-2">
+              <span className="chip bg-ok/12 text-ok">🔒 Isolation multi-tenant</span>
+              <span className="chip bg-cblue/10 text-cblue">🔢 Numéros officiels</span>
+              <span className="chip bg-amber/15 text-amber-2">🧾 Reçus A6</span>
+              <span className="chip bg-magenta/10 text-magenta">💬 WhatsApp</span>
             </div>
+
+            {notice && (
+              <div className="mt-6 rounded-xl border border-amber/50 bg-amber/15 px-4 py-3 text-sm font-semibold text-amber-2">
+                ⚠️ {notice}
+              </div>
+            )}
+            {session && (
+              <div className="card mt-6 flex flex-wrap items-center justify-between gap-3 p-4">
+                <p className="text-sm text-ink">
+                  Connecté en tant que <b>{session.role === "admin" ? "Administrateur Principal" : "École abonnée"}</b>{" "}
+                  <span className="text-inkmut">({session.email})</span>
+                </p>
+                <div className="flex gap-2">
+                  <Link href={session.role === "admin" ? "/admin" : `/ecoles/${session.schoolId}`} className="btn-primary btn-sm">
+                    Continuer vers mon espace →
+                  </Link>
+                  <form action={logout}>
+                    <button type="submit" className="btn-secondary btn-sm">
+                      Déconnexion
+                    </button>
+                  </form>
+                </div>
+              </div>
+            )}
           </div>
 
-          {/* Chalkboard login */}
-          <div id="login" className="scroll-mt-24 anim-in" style={{ animationDelay: "150ms" }}>
-            <div className="chalkboard chalk-frame rounded-3xl p-6 sm:p-8 relative overflow-hidden">
-              <div className="absolute top-3 right-4 flex gap-1.5">
-                <span className="w-2.5 h-2.5 rounded-full bg-coral/80" /><span className="w-2.5 h-2.5 rounded-full bg-amber/80" /><span className="w-2.5 h-2.5 rounded-full bg-ok/80" />
+          <div id="login" className="anim-in scroll-mt-24" style={{ animationDelay: "150ms" }}>
+            <div className="chalkboard chalk-frame relative overflow-hidden rounded-3xl p-6 sm:p-8">
+              <div className="absolute right-4 top-3 flex gap-1.5">
+                <span className="h-2.5 w-2.5 rounded-full bg-coral/80" />
+                <span className="h-2.5 w-2.5 rounded-full bg-amber/80" />
+                <span className="h-2.5 w-2.5 rounded-full bg-ok/80" />
               </div>
-              <p className="text-amber font-bold text-[10px] tracking-[0.25em] uppercase">{t("pub.loginSub")}</p>
-              <h2 className="font-display font-black text-cream text-2xl mt-1">{t("pub.loginTitle")}</h2>
-              {ready && role === "tenant" ? (
-                <div className="mt-6 space-y-3">
-                  <p className="text-cream/80 text-sm">{t("active")} ✓</p>
-                  <button type="button" className="btn btn-amber w-full text-base py-3.5" onClick={() => router.push("/app")}>
-                    <Icon name="chevR" size={17} /> {t("pub.enterApp")}
-                  </button>
-                </div>
-              ) : (
-                <>
-                  {/* Tabs: Connexion / Créer un compte */}
-                  <div className="mt-4 inline-flex w-full rounded-xl bg-white/10 p-1 gap-1">
-                    {(["login", "register"] as const).map((tab) => (
-                      <button
-                        type="button"
-                        key={tab}
-                        onClick={() => { setAuthTab(tab); setErr(false); setRegErr(null); }}
-                        className={`grow rounded-lg px-3 py-2 text-xs font-extrabold uppercase tracking-wide transition-all ${authTab === tab ? "bg-amber text-board-2 shadow" : "text-cream/65 hover:text-cream"}`}
-                      >
-                        {tab === "login" ? t("pub.tabLogin") : t("pub.tabRegister")}
-                      </button>
-                    ))}
-                  </div>
+              <p className="text-[10px] font-bold uppercase tracking-[0.25em] text-amber">Direction & écoles — connexion sécurisée</p>
+              <h2 className="mt-1 font-display text-2xl font-black text-cream">Espace École</h2>
+              <div className="mt-4">
+                <SchoolLoginForm />
+              </div>
 
-                  {authTab === "login" ? (
-                    <form onSubmit={doLogin} autoComplete="off" className="mt-4 space-y-3.5">
-                      <div>
-                        <label className="label !text-cream/60">{t("email")}</label>
-                        <input className="input !bg-white/10 !border-white/20 !text-cream placeholder:!text-cream/30" type="email" name="school_ident" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="direction@ecole.cm" autoComplete="off" data-lpignore="true" data-1p-ignore="true" data-form-type="other" />
-                      </div>
-                      <div>
-                        <label className="label !text-cream/60">{t("password")}</label>
-                        <input className="input !bg-white/10 !border-white/20 !text-cream placeholder:!text-cream/30" type="password" name="school_secret" value={password} onChange={(e) => setPassword(e.target.value)} placeholder="••••••••" autoComplete="new-password" data-lpignore="true" data-1p-ignore="true" data-form-type="other" />
-                      </div>
-                      {err && <p className="text-coral text-xs font-bold flex items-center gap-1.5 anim-pop"><Icon name="alert" size={13} /> {t("pub.invalid")}</p>}
-                      <button type="submit" className="btn btn-amber w-full text-base py-3.5" disabled={busy}>
-                        <Icon name={busy ? "refresh" : "key"} size={17} className={busy ? "spin" : ""} /> {t("login")}
-                      </button>
-                      <p className="text-[10.5px] text-cream/45 flex items-start gap-1.5 leading-relaxed">
-                        <Icon name="shield" size={12} className="shrink-0 mt-0.5 text-amber" /> {t("pub.adminDirect")}
-                      </p>
-                      <button type="button" onClick={() => void directAdminLogin()} disabled={busy}
-                        className="w-full inline-flex items-center justify-center gap-2 rounded-xl border-2 border-amber/70 bg-amber/15 px-4 py-2.5 text-xs font-extrabold text-amber transition-all hover:bg-amber hover:text-board-2 disabled:opacity-60">
-                        <Icon name="key" size={14} className={busy ? "spin" : ""} /> {t("pub.adminDirectBtn")}
-                      </button>
-                      <button type="button" onClick={() => { setAuthTab("register"); setRegErr(null); }}
-                        className="w-full text-center text-xs font-bold text-amber hover:text-white underline underline-offset-4">
-                        {t("pub.noAccount")}
-                      </button>
-                      <div className="pt-2 border-t border-white/10">
-                        <p className="text-[10px] uppercase tracking-widest text-cream/40 font-bold mb-2">Démo / Demo</p>
-                        <div className="flex flex-wrap gap-2">
-                          <button type="button" className="chip bg-white/10 text-cream/80 hover:bg-amber hover:text-board-2 transition-colors"
-                            onClick={() => { setEmail("direction@ecole.cm"); setPassword("demo1234"); setErr(false); }}>
-                            🏫 {t("pub.demoDir")}
-                          </button>
-                        </div>
-                      </div>
-                    </form>
-                  ) : (
-                    <form onSubmit={doRegister} autoComplete="off" className="mt-4 space-y-3">
-                      <div>
-                        <p className="text-[11px] text-cream/70 leading-relaxed">{t("pub.regSub")}</p>
-                      </div>
-                      <div>
-                        <label className="label !text-cream/60">{t("pub.regName")}</label>
-                        <input className="input !bg-white/10 !border-white/20 !text-cream placeholder:!text-cream/30" value={reg.name} onChange={(e) => setReg({ ...reg, name: e.target.value })} placeholder="Complexe Bilingue Les Palmiers" autoComplete="organization" />
-                      </div>
-                      <div>
-                        <label className="label !text-cream/60">{t("email")}</label>
-                        <input className="input !bg-white/10 !border-white/20 !text-cream placeholder:!text-cream/30" type="email" value={reg.email} onChange={(e) => setReg({ ...reg, email: e.target.value })} placeholder="direction@votre-ecole.cm" autoComplete="off" data-form-type="other" />
-                      </div>
-                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
-                        <div>
-                          <label className="label !text-cream/60">{t("pub.regPassword")}</label>
-                          <input className="input !bg-white/10 !border-white/20 !text-cream placeholder:!text-cream/30" type="password" value={reg.password} onChange={(e) => setReg({ ...reg, password: e.target.value })} placeholder="••••••" autoComplete="new-password" />
-                        </div>
-                        <div>
-                          <label className="label !text-cream/60">{t("pub.regConfirm")}</label>
-                          <input className="input !bg-white/10 !border-white/20 !text-cream placeholder:!text-cream/30" type="password" value={reg.confirm} onChange={(e) => setReg({ ...reg, confirm: e.target.value })} placeholder="••••••" autoComplete="new-password" />
-                        </div>
-                      </div>
-                      <div>
-                        <label className="label !text-cream/60">{t("pub.regPhone")}</label>
-                        <input className="input !bg-white/10 !border-white/20 !text-cream placeholder:!text-cream/30 tabular" value={reg.phone} onChange={(e) => setReg({ ...reg, phone: e.target.value })} placeholder="6XX XX XX XX" />
-                      </div>
-                      {regErr && <p className="text-coral text-xs font-bold flex items-center gap-1.5 anim-pop"><Icon name="alert" size={13} /> {regErr}</p>}
-                      <button type="submit" className="btn btn-amber w-full text-base py-3.5" disabled={regBusy}>
-                        <Icon name={regBusy ? "refresh" : "userPlus"} size={17} className={regBusy ? "spin" : ""} /> {t("pub.regSubmit")}
-                      </button>
-                      <button type="button" onClick={() => { setAuthTab("login"); setRegErr(null); }}
-                        className="w-full text-center text-xs font-bold text-amber hover:text-white underline underline-offset-4">
-                        {t("pub.haveAccount")}
-                      </button>
-                    </form>
-                  )}
-                </>
-              )}
-              <p className="text-[10px] text-cream/40 mt-4 flex items-center gap-1.5"><Icon name="shield" size={11} /> {t("pub.secure")}</p>
+              <details className="group mt-5 border-t border-white/10 pt-3">
+                <summary className="flex cursor-pointer list-none items-center gap-1.5 text-[10.5px] text-cream/45 hover:text-cream/80">
+                  🛡️ Accès Direction Générale
+                  <span className="text-cream/30 group-open:hidden">· connexion directe par e-mail</span>
+                </summary>
+                <div className="mt-3">
+                  <AdminLoginForm />
+                </div>
+              </details>
+              <p className="mt-4 flex items-center gap-1.5 text-[10px] text-cream/40">
+                🔐 Sessions chiffrées · données isolées par école
+              </p>
             </div>
           </div>
         </div>
       </section>
 
-      {/* ── Features ── */}
-      <section className="px-4 lg:px-6 py-12">
-        <div className="max-w-6xl mx-auto grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 stagger">
-          {[
-            { icon: "userPlus", tone: "#173f2f", tt: "pub.f1t", dd: "pub.f1d" },
-            { icon: "phone", tone: "#2E9E6B", tt: "pub.f2t", dd: "pub.f2d" },
-            { icon: "shield", tone: "#2E5FE8", tt: "pub.f3t", dd: "pub.f3d" },
-            { icon: "globe", tone: "#C4327E", tt: "pub.f4t", dd: "pub.f4d" },
-          ].map((f) => (
-            <div key={f.tt} className="card p-5 hover:-translate-y-1 transition-transform group">
-              <span className="inline-flex p-3 rounded-2xl transition-transform group-hover:rotate-6 group-hover:scale-110" style={{ background: f.tone + "18", color: f.tone }}>
-                <Icon name={f.icon} size={22} />
+      {/* Fonctionnalités */}
+      <section className="px-4 py-12 lg:px-6">
+        <div className="mx-auto grid max-w-6xl grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
+          {FEATURES.map((f) => (
+            <div key={f.title} className="card group p-5 transition-transform hover:-translate-y-1">
+              <span
+                className="inline-flex rounded-2xl p-3 transition-transform group-hover:rotate-6 group-hover:scale-110"
+                style={{ background: `${f.color}18`, color: f.color }}
+              >
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="h-6 w-6">
+                  <path d={f.icon} />
+                </svg>
               </span>
-              <h3 className="font-display font-bold text-board mt-3">{t(f.tt)}</h3>
-              <p className="text-[13px] text-inkmut leading-relaxed mt-1.5">{t(f.dd)}</p>
+              <h3 className="mt-3 font-display font-bold text-board">{f.title}</h3>
+              <p className="mt-1.5 text-[13px] leading-relaxed text-inkmut">{f.text}</p>
             </div>
           ))}
         </div>
       </section>
 
-      {/* ── Structure ── */}
-      <section id="structure" className="scroll-mt-24 px-4 lg:px-6 py-12">
-        <div className="max-w-6xl mx-auto">
-          <div className="text-center max-w-2xl mx-auto">
-            <h2 className="font-display font-black text-board text-3xl sm:text-4xl">{t("pub.structureTitle")}</h2>
-            <p className="text-inkmut mt-2">{t("pub.structureSub")}</p>
+      {/* Architecture par blocs */}
+      <section id="structure" className="scroll-mt-24 px-4 py-12 lg:px-6">
+        <div className="mx-auto max-w-6xl">
+          <div className="mx-auto max-w-2xl text-center">
+            <h2 className="font-display text-3xl font-black text-board sm:text-4xl">Une architecture par blocs</h2>
+            <p className="mt-2 text-inkmut">
+              De la Petite Section à la Terminale — chaque élève est intégré dans la liste de sa classe et de son bloc.
+            </p>
           </div>
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mt-8 stagger">
-            {BLOCKS.map((b) => (
-              <div key={b} className="card overflow-hidden hover:-translate-y-1 transition-transform">
-                <div className="h-2" style={{ background: BLOCK_COLORS[b] }} />
-                <div className="p-5">
-                  <div className="flex items-baseline justify-between">
-                    <h3 className="font-display font-bold text-board text-xl">{STRUCTURE[b].fr}</h3>
-                    <span className="text-xs font-bold text-inkmut italic">{STRUCTURE[b].en}</span>
+          <div className="mt-8 grid grid-cols-1 gap-4 md:grid-cols-3">
+            {LEVELS.map((level) => {
+              const info = LEVEL_INFO[level];
+              return (
+                <div key={level} className="card overflow-hidden p-0 transition-transform hover:-translate-y-1">
+                  <div className="h-2" style={{ background: info.hex }} />
+                  <div className="p-5">
+                    <div className="flex items-baseline justify-between">
+                      <h3 className="font-display text-xl font-bold text-board">{info.label}</h3>
+                      <span className="text-xs font-bold italic text-inkmut">{info.english}</span>
+                    </div>
+                    <div className="mt-4 flex flex-wrap gap-1.5">
+                      {DEFAULT_CLASSES[level].map((name) => (
+                        <span key={name} className="chip border" style={{ borderColor: `${info.hex}55`, color: "#22301f", background: `${info.hex}14` }}>
+                          {name}
+                        </span>
+                      ))}
+                    </div>
+                    <p className="mt-4 flex items-center gap-1.5 text-[11px] text-inkmut">
+                      {info.emoji} {info.description}
+                    </p>
                   </div>
-                  <div className="flex flex-wrap gap-1.5 mt-4">
-                    {STRUCTURE[b].levels.map((l) => (
-                      <span key={l.code} className="chip border" style={{ borderColor: BLOCK_COLORS[b] + "55", color: "#22301f", background: BLOCK_COLORS[b] + "14" }}>
-                        {l.fr} <span className="opacity-55 font-normal">· {l.en}</span>
-                      </span>
-                    ))}
-                  </div>
-                  <p className="text-[11px] text-inkmut mt-4 flex items-center gap-1.5">
-                    <Icon name="globe" size={12} className="text-teal" />
-                    {b === "secondary" ? VARIANTS.map((v) => (locale === "fr" ? v.fr : v.en)).join(" · ") : (locale === "fr" ? VARIANTS[2].fr : VARIANTS[2].en)}
-                  </p>
                 </div>
+              );
+            })}
+          </div>
+        </div>
+      </section>
+
+      {/* Abonnement */}
+      <section id="pricing" className="scroll-mt-24 px-4 py-12 lg:px-6">
+        <div className="mx-auto max-w-6xl">
+          <div className="mx-auto max-w-2xl text-center">
+            <h2 className="font-display text-3xl font-black text-board sm:text-4xl">Abonnement simple, sans surprise</h2>
+            <p className="mt-2 text-inkmut">
+              Cochez une ou plusieurs structures (Maternelle, Primaire, Secondaire) et choisissez votre durée — le tarif
+              est multiplié automatiquement par le nombre de structures.
+            </p>
+          </div>
+          <div className="mt-8 grid gap-4 md:grid-cols-3">
+            {PLANS.map((plan, index) => (
+              <div key={plan.code} className={`card relative overflow-hidden p-6 transition-transform hover:-translate-y-1 ${index === 2 ? "ring-2 ring-amber" : ""}`}>
+                {index === 2 && <span className="chip absolute right-4 top-4 bg-amber text-board-2">Le plus avantageux</span>}
+                <p className="text-xs font-extrabold uppercase tracking-wide text-inkmut">{plan.short}</p>
+                <p className="mt-2 font-display text-3xl font-black text-board">{formatNumber(plan.price)} FCFA</p>
+                <p className="text-sm text-inkmut">{plan.label} · par structure</p>
+                <ul className="mt-4 space-y-1 text-sm text-ink">
+                  <li>1 structure : <b>{formatNumber(plan.price)} FCFA</b></li>
+                  <li>2 structures : <b>{formatNumber(plan.price * 2)} FCFA</b></li>
+                  <li>3 structures : <b>{formatNumber(plan.price * 3)} FCFA</b></li>
+                </ul>
+                <Link href="/inscription" className={`${index === 2 ? "btn-school" : "btn-secondary"} mt-5 w-full`}>
+                  Choisir cette durée
+                </Link>
               </div>
             ))}
           </div>
-        </div>
-      </section>
 
-      {/* ── Pricing / subscription ── */}
-      <section id="pricing" className="scroll-mt-24 px-4 lg:px-6 py-14 relative">
-        <div className="max-w-6xl mx-auto">
-          <div className="text-center max-w-2xl mx-auto">
-            <h2 className="font-display font-black text-board text-3xl sm:text-4xl">{t("pub.pricingTitle")}</h2>
-            <p className="text-inkmut mt-2">{t("pub.pricingSub")}</p>
-          </div>
-
-          <div className="grid grid-cols-1 lg:grid-cols-[1fr_400px] gap-6 mt-9 items-start">
-            <div>
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5 items-start">
-                <Field label={t("pub.chooseStructure")} hint={mult > 1 ? t("pub.completeRule", { n: mult }) : t("pub.singleRule")}>
-                  <div className="grid grid-cols-3 gap-2">
-                    {BLOCKS.map((b) => {
-                      const active = structures.includes(b);
-                      return (
-                        <button type="button" key={b} onClick={() => toggleStruct(b)}
-                          className={`rounded-xl border-2 px-2.5 py-2.5 text-left transition-all cursor-pointer ${active ? "border-board bg-board text-white shadow-md" : "border-line bg-white text-inkmut hover:border-board"}`}>
-                          <div className="flex items-center justify-between gap-1">
-                            <span className="w-2.5 h-2.5 rounded-full" style={{ background: active ? "#f0a52b" : BLOCK_COLORS[b] }} />
-                            <span className="text-xs font-extrabold">{active ? "✓" : "+"}</span>
-                          </div>
-                          <p className="font-bold text-xs mt-1.5 truncate">{locale === "fr" ? STRUCTURE[b].fr : STRUCTURE[b].en}</p>
-                        </button>
-                      );
-                    })}
-                  </div>
-                </Field>
-                <Field label={t("pub.chooseDuration")}>
-                  <select className="input font-semibold" value={planId} onChange={(e) => setPlanId(e.target.value)}>
-                    {PLANS.map((p) => (
-                      <option key={p.id} value={p.id}>
-                        {locale === "fr" ? p.fr : p.en} — {money(p.price * mult)}
-                      </option>
-                    ))}
-                  </select>
-                </Field>
-              </div>
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 mt-5">
-                {PLANS.map((p) => {
-                  const computed = p.price * mult;
-                  return (
-                    <button type="button" key={p.id} onClick={() => setPlanId(p.id)}
-                      className={`relative text-left rounded-2xl border-2 p-5 transition-all hover:-translate-y-1 cursor-pointer ${planId === p.id ? "border-board bg-board text-white shadow-xl" : "border-line bg-white hover:border-board/60"}`}>
-                      {p.id === "annual" && <span className={`absolute -top-2.5 right-3 chip ${planId === p.id ? "bg-amber text-board-2" : "bg-coral text-white"}`}>{t("pub.save62")}</span>}
-                      {p.id === "quarterly" && <span className={`absolute -top-2.5 right-3 chip ${planId === p.id ? "bg-amber text-board-2" : "bg-teal text-white"}`}>{t("pub.save25")}</span>}
-                      <p className={`text-xs font-bold uppercase tracking-wider ${planId === p.id ? "text-amber" : "text-inkmut"}`}>{locale === "fr" ? p.fr : p.en}</p>
-                      <p className="font-display font-black text-2xl mt-1.5 tabular">{money(computed)}</p>
-                      <p className={`text-[11px] ${planId === p.id ? "text-white/75" : "text-inkmut"}`}>
-                        {mult > 1 ? `${t("pub.baseShort")} ${money(p.price)} × ${mult}` : (p.id === "monthly" ? t("pub.perMonth") : p.id === "quarterly" ? t("pub.perQuarter") : t("pub.perYear"))}
-                      </p>
-                      <span className={`mt-3 inline-flex w-5 h-5 rounded-full border-2 items-center justify-center ${planId === p.id ? "border-amber bg-amber text-board-2" : "border-line"}`}>
-                        {planId === p.id && <Icon name="check" size={12} />}
-                      </span>
-                    </button>
-                  );
-                })}
-              </div>
-              <div className="card p-5 mt-5">
-                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3.5">
-                  <Field label={`${t("pub.yourSchool")} *`}><input className="input" value={school} onChange={(e) => setSchool(e.target.value)} placeholder="GS Les Papillons" /></Field>
-                  <Field label={`${t("pub.yourPhone")} *`}><input className="input tabular" value={phone} onChange={(e) => setPhone(e.target.value)} placeholder="6XX XX XX XX" /></Field>
-                  <Field label={t("email")}><input className="input" type="email" value={mail} onChange={(e) => setMail(e.target.value)} placeholder="ecole@exemple.cm" /></Field>
-                </div>
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5 mt-3.5">
-                  <Field label={t("pub.payMethod")}>
-                    <select className="input font-semibold" value={payMethod} onChange={(e) => setPayMethod(e.target.value as "orange" | "momo")}>
-                      <option value="orange">Orange Money — {PLATFORM.orangeMoney} ({PLATFORM.payee})</option>
-                      <option value="momo">MTN Mobile Money — {PLATFORM.mobileMoney} ({PLATFORM.payee})</option>
-                    </select>
-                  </Field>
-                  <Field label={t("pub.payRef")}>
-                    <input className="input font-mono" value={payRef} onChange={(e) => setPayRef(e.target.value)} placeholder={t("pub.payRefPh")} />
-                  </Field>
-                </div>
-                <div className="flex flex-wrap items-center gap-4 mt-4 pt-4 border-t border-line">
+          <div id="payment" className="mt-10 grid scroll-mt-24 gap-6 lg:grid-cols-[1fr_1.1fr]">
+            <div className="space-y-3">
+              <h3 className="font-display text-xl font-bold text-board">Numéros de paiement</h3>
+              {PAYMENT_NUMBERS.map((p) => (
+                <div key={p.label} className="card flex items-center justify-between gap-3 p-4">
                   <div>
-                    <p className="text-[10px] font-bold uppercase tracking-widest text-inkmut">
-                      {structureLabel(structures, locale)} · {locale === "fr" ? plan.shortFr : plan.shortEn}
-                    </p>
-                    <p className="font-display font-black text-3xl text-board tabular">{money(totalPrice)}</p>
-                    {mult > 1 && (
-                      <p className="text-[11px] font-semibold text-amber-2 tabular">{money(plan.price)} × {mult} = {money(totalPrice)}</p>
-                    )}
+                    <p className="text-xs font-extrabold uppercase tracking-wide text-inkmut">{p.label}</p>
+                    <p className="font-mono text-lg font-bold text-board">{p.number}</p>
                   </div>
-                  <button type="button" className="btn btn-primary grow sm:grow-0 sm:ml-auto text-sm sm:text-base px-5 py-3.5" onClick={order} disabled={orderBusy}>
-                    <Icon name={orderBusy ? "refresh" : "check"} size={18} className={orderBusy ? "spin" : ""} /> {t("pub.order")}
-                  </button>
+                  <span className="chip bg-amber/15 text-amber-2">Au nom de {PAYMENT_HOLDER}</span>
                 </div>
-                {proofWaUrl && (
-                  <div className="mt-4 rounded-2xl border-2 border-amber/60 bg-gradient-to-br from-amber/15 via-ok/5 to-white p-4 space-y-3 anim-pop">
-                    <div className="flex items-start gap-3">
-                      <span className="p-2 rounded-xl bg-amber text-board-2 shrink-0"><Icon name="info" size={18} /></span>
-                      <div className="space-y-1.5 text-xs text-ink">
-                        <p className="font-display font-bold text-sm text-board">{t("pub.proofTitle")}</p>
-                        <p>1. <b>{t("pub.proofStep1")}</b></p>
-                        <p>2. {t("pub.proofStep2")}</p>
-                        <p className="text-inkmut">3. {t("pub.proofStep3")}</p>
-                      </div>
-                    </div>
-                    <div className="flex flex-wrap items-end gap-2.5 pt-2 border-t border-line/70">
-                      <Field label={t("pub.payRef")} className="grow min-w-[210px]">
-                        <input className="input font-mono bg-white" value={payRef} onChange={(e) => setPayRef(e.target.value)} placeholder={t("pub.payRefPh")} />
-                      </Field>
-                      <button type="button" className="btn btn-ghost btn-sm mb-0.5" onClick={saveProofRef} disabled={orderBusy}>
-                        <Icon name="check" size={14} /> {t("pub.saveRef")}
-                      </button>
-                      <a className="btn btn-wa grow sm:grow-0 mb-0.5" href={proofWaUrl} target="_blank" rel="noreferrer">
-                        <WaIcon size={17} /> {t("pub.sendProofWa")}
-                      </a>
-                    </div>
-                  </div>
-                )}
-              </div>
+              ))}
             </div>
-
-            {/* Payment numbers */}
-            <div id="payment" className="scroll-mt-24 space-y-3">
-              <h3 className="font-display font-bold text-board text-lg flex items-center gap-2"><Icon name="coins" size={18} className="text-amber-2" /> {t("pub.payNumbers")}</h3>
-              <div className="rounded-2xl border-2 border-amber/50 bg-gradient-to-br from-amber/15 to-amber/5 p-5">
-                <p className="text-xs font-extrabold uppercase tracking-wider text-amber-2">Orange Money</p>
-                <p className="font-mono font-bold text-2xl text-board mt-1 tabular">{PLATFORM.orangeMoney}</p>
-                <div className="mt-2"><CopyBtn text={PLATFORM.orangeMoney} /></div>
+            <div className="card p-6">
+              <h3 className="font-display text-xl font-bold text-board">Comment activer mon compte ?</h3>
+              <ol className="mt-3 space-y-2 text-sm text-ink">
+                <li>1. Créez votre compte abonné : nom, e-mail, mot de passe, WhatsApp, structures et durée.</li>
+                <li>2. Payez le montant total affiché via Orange Money ou MTN Mobile Money.</li>
+                <li>3. Envoyez la référence et la capture du paiement à l&apos;administrateur par WhatsApp (bouton pré-rempli).</li>
+                <li>4. La Direction Générale valide votre demande : accès immédiat à vos structures payées.</li>
+              </ol>
+              <div className="mt-5 flex flex-wrap gap-2">
+                <Link href="/inscription" className="btn-school">
+                  Créer mon compte abonné
+                </Link>
+                <a href={whatsappUrl(ADMIN_WHATSAPP, `Bonjour, je souhaite souscrire un abonnement ${APP_NAME}.`)} target="_blank" rel="noopener noreferrer" className="btn-whatsapp">
+                  💬 Contacter l&apos;administrateur
+                </a>
               </div>
-              <div className="rounded-2xl border-2 border-warn/50 bg-gradient-to-br from-warn/15 to-warn/5 p-5">
-                <p className="text-xs font-extrabold uppercase tracking-wider text-warn">MTN Mobile Money</p>
-                <p className="font-mono font-bold text-2xl text-board mt-1 tabular">{PLATFORM.mobileMoney}</p>
-                <div className="mt-2"><CopyBtn text={PLATFORM.mobileMoney} /></div>
-              </div>
-              <div className="card p-4 flex items-center gap-3">
-                <span className="w-10 h-10 rounded-full bg-board text-amber font-display font-black inline-flex items-center justify-center">ML</span>
-                <div>
-                  <p className="text-[10px] font-bold uppercase tracking-widest text-inkmut">{locale === "fr" ? "Au nom de" : "Account name"}</p>
-                  <p className="font-bold text-board">{PLATFORM.payee}</p>
-                </div>
-              </div>
-              <p className="text-[12px] text-inkmut leading-relaxed flex gap-2 px-1"><Icon name="info" size={14} className="shrink-0 mt-0.5 text-teal" /> {t("pub.payNotice")}</p>
             </div>
           </div>
         </div>
       </section>
 
-      {/* ── Footer ── */}
-      <footer className="chalkboard chalk-frame mt-8 px-4 lg:px-6 py-10">
-        <div className="max-w-6xl mx-auto flex flex-col sm:flex-row items-center gap-5 justify-between">
-          <div className="flex items-center gap-3">
-            <Logo size={38} light />
-            <div>
-              <p className="font-display font-black text-cream text-lg leading-none">Scolaria</p>
-              <p className="text-[10px] text-cream/50 mt-1">{t("pub.footer")}</p>
-            </div>
+      {/* Pied de page */}
+      <footer className="border-t border-line px-4 py-10 lg:px-6">
+        <div className="mx-auto flex max-w-6xl flex-col items-center justify-between gap-4 text-center sm:flex-row sm:text-left">
+          <div>
+            <p className="font-display text-lg font-black text-board">{APP_NAME}</p>
+            <p className="text-xs text-inkmut">
+              {APP_NAME} — un produit {APP_BRAND} · {APP_CITY}
+            </p>
           </div>
-          <div className="flex flex-wrap items-center gap-3 text-xs text-cream/70">
-            <span className="inline-flex items-center gap-1.5 text-cream/60"><Icon name="shield" size={13} className="text-amber" /> {PLATFORM.company}</span>
-            <a className="inline-flex items-center gap-1.5 hover:text-amber transition-colors" target="_blank" rel="noreferrer" href={waLink(PLATFORM.whatsapp, "Scolaria — MFIYA & Fils")}>
-              <WaIcon size={13} /> {PLATFORM.whatsappDisplay}
+          <div className="text-xs text-inkmut">
+            <p className="font-bold text-board">
+              {APP_BRAND} · {APP_PHONE}
+            </p>
+            <p>
+              Gestion scolaire bilingue, sécurisée & multi-établissements · © {new Date().getFullYear()} {APP_BRAND}
+            </p>
+            <a href={APP_URL} className="text-amber-2 hover:underline">
+              {APP_URL.replace(/^https?:\/\//, "")}
             </a>
           </div>
         </div>
-        <p className="text-center text-[10px] text-cream/35 mt-6">{t("tagline")} · © 2026 MFIYA & Fils</p>
       </footer>
-      <ToastHost />
-    </div>
+    </main>
   );
 }

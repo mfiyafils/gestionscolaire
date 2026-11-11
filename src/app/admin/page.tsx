@@ -1,958 +1,251 @@
-"use client";
-import { useEffect, useMemo, useState } from "react";
-import { useRouter } from "next/navigation";
-import { useApp } from "@/lib/store";
-import { useI18n } from "@/lib/i18n";
-import { PLANS, PLATFORM, money, fmtDate, waLink, STRUCTURE, BLOCKS, BLOCK_COLORS, classLabel, parseStructures, subscriptionPrice, structureLabel, type Block } from "@/lib/core";
-import type { AdminTenant, SubRequestRow } from "@/lib/types";
-import { Icon, WaIcon, Logo, LangToggle, RefreshButton, ToastHost, Modal, Confirm, Field, Badge, StatCard, EmptyState, CopyBtn } from "@/components/ui";
-import { Workspace } from "@/components/workspace";
-import { AiCodeAssistant } from "@/components/ai-updater";
+import Link from "next/link";
+import { requireAdmin } from "@/lib/auth";
+import { approveSubscriptionRequest, rejectSubscriptionRequest, setSubscriberStatus } from "@/actions/subscribers";
+import { ConfirmButton } from "@/components/client";
+import { StudentsTable } from "@/components/StudentsTable";
+import { FormulaBadges, PageHeader, StatCard, StatusBadge, WhatsAppLink } from "@/components/ui";
+import { LEVELS, LEVEL_INFO, formulaLabel, getPlan } from "@/lib/constants";
+import { getAdminStats, listStudents, listSubscribers } from "@/lib/data";
+import { formatDate, formatMoney, formatNumber, normalizePhone, whatsappUrl } from "@/lib/utils";
 
-type Tab = "tenants" | "requests" | "updates" | "sandbox";
-type TenantFilter = "all" | "active" | "suspended" | "revoked";
-
-export default function AdminPage() {
-  const { ready, role, admin, data, act, toast, login, logout, refresh, syncing } = useApp();
-  const { t, locale } = useI18n();
-  const router = useRouter();
-  const [tab, setTab] = useState<Tab>("tenants");
-  const [addOpen, setAddOpen] = useState(false);
-  const [editFor, setEditFor] = useState<AdminTenant | null>(null);
-  const [deleteFor, setDeleteFor] = useState<AdminTenant | null>(null);
-  const [creds, setCreds] = useState<{ email: string; password?: string; phone?: string; schoolName?: string } | null>(null);
-  const [busyId, setBusyId] = useState<string | null>(null);
-  const [tenantQuery, setTenantQuery] = useState("");
-  const [tenantFilter, setTenantFilter] = useState<TenantFilter>("all");
-  const [sandboxPersona, setSandboxPersona] = useState<"all" | Block>("all");
-  const [sandboxDevice, setSandboxDevice] = useState<"desktop" | "mobile">("desktop");
-  const [sandboxResetOpen, setSandboxResetOpen] = useState(false);
-  const [sandboxBusy, setSandboxBusy] = useState(false);
-
-  useEffect(() => {
-    if (!ready) return;
-    if (role === "tenant") router.replace("/app");
-  }, [ready, role, router]);
-
-  const stats = useMemo(() => {
-    if (!admin) return null;
-    const active = admin.tenants.filter((x) => x.status === "active");
-    const revenue = active.reduce((a, x) => a + subscriptionPrice(x.plan, x.structures?.length ? x.structures : x.structure), 0);
-    return {
-      total: admin.tenants.length,
-      active: active.length,
-      pending: admin.requests.filter((r) => r.status === "pending").length,
-      revenue,
-      suspended: admin.tenants.filter((x) => x.status === "suspended").length,
-      revoked: admin.tenants.filter((x) => x.status === "revoked").length,
-    };
-  }, [admin]);
-
-  const visibleTenants = useMemo(() => {
-    if (!admin) return [];
-    const needle = tenantQuery.trim().toLowerCase();
-    return admin.tenants.filter((x) => {
-      if (tenantFilter !== "all" && x.status !== tenantFilter) return false;
-      if (!needle) return true;
-      return `${x.name} ${x.email} ${x.phone}`.toLowerCase().includes(needle);
-    });
-  }, [admin, tenantQuery, tenantFilter]);
-
-  if (!ready || role === "tenant") {
-    return (
-      <div className="min-h-dvh flex flex-col items-center justify-center gap-4">
-        <Logo size={56} />
-        <Icon name="refresh" size={20} className="spin text-amber-2" />
-      </div>
-    );
-  }
-
-  if (role !== "admin") {
-    return <AdminLoginGate onLogin={login} />;
-  }
-
-  if (!admin || !stats) {
-    return (
-      <div className="min-h-dvh flex flex-col items-center justify-center gap-4">
-        <Logo size={56} />
-        <Icon name="refresh" size={20} className="spin text-amber-2" />
-      </div>
-    );
-  }
-
-  const statusToast: Record<string, string> = {
-    suspended: t("ad.suspendDone", { name: "" }),
-    active: t("ad.readmitDone", { name: "" }),
-    revoked: t("ad.removeDone", { name: "" }),
-  };
-
-  const setStatus = async (tenant: AdminTenant, status: string) => {
-    setBusyId(tenant.id);
-    const res = await act("admin.tenant.update", { id: tenant.id, status });
-    setBusyId(null);
-    if (!res.ok) {
-      toast(t("errorGeneric"), "error");
-      return;
-    }
-    const template = statusToast[status] ?? t("savedOk");
-    toast(template.replace("{name} ", "").replace("{name}", tenant.name), "success");
-  };
-
-  const resetSandbox = async () => {
-    setSandboxBusy(true);
-    const res = await act("sandbox.reset");
-    setSandboxBusy(false);
-    setSandboxResetOpen(false);
-    toast(res.ok ? t("se.sandboxResetDone") : t("errorGeneric"), res.ok ? "success" : "error");
-  };
-  const approve = async (r: SubRequestRow, decision: "approved" | "rejected") => {
-    setBusyId(r.id);
-    const res = await act("admin.request", { id: r.id, decision });
-    setBusyId(null);
-    if (res.ok) {
-      if (decision === "approved" && res.result?.password) {
-        setCreds({ email: String(res.result.email), password: String(res.result.password), phone: String(res.result.phone ?? r.phone), schoolName: r.schoolName });
-      } else toast(decision === "approved" ? t("savedOk") : t("savedOk"));
-    } else toast(t("errorGeneric"), "error");
-  };
-
-  const statusBadge = (s: string) =>
-    s === "active" ? <Badge tone="green">{t("active")}</Badge> : s === "suspended" ? <Badge tone="amber">{t("suspended")}</Badge> : <Badge tone="red">{t("revoked")}</Badge>;
-
-  const TABS: { id: Tab; icon: string; label: string; badge?: number }[] = [
-    { id: "tenants", icon: "building", label: t("ad.subscribersTitle") },
-    { id: "requests", icon: "mail", label: t("ad.requests"), badge: stats.pending },
-    { id: "updates", icon: "rocket", label: t("ad.updates") },
-    { id: "sandbox", icon: "flask", label: t("ad.simModuleTitle") },
-  ];
-
-  const FILTERS: { id: TenantFilter; label: string; count: number; tone: string }[] = [
-    { id: "all", label: t("ad.filterAll"), count: stats.total, tone: "#0f3325" },
-    { id: "active", label: t("ad.filterActive"), count: stats.active, tone: "#1b8654" },
-    { id: "suspended", label: t("ad.filterSuspended"), count: stats.suspended, tone: "#b86f00" },
-    { id: "revoked", label: t("ad.filterRevoked"), count: stats.revoked, tone: "#bc2b1c" },
-  ];
+export default async function AdminDashboardPage() {
+  await requireAdmin();
+  const [stats, subscribers, recentStudents] = await Promise.all([
+    getAdminStats(),
+    listSubscribers(),
+    listStudents({ order: "recent", limit: 8 }),
+  ]);
+  const pending = subscribers.filter((s) => s.status === "en_attente");
+  const recentSubscribers = subscribers.filter((s) => s.status !== "en_attente").slice(0, 6);
 
   return (
-    <div className="min-h-dvh">
-      {/* Header */}
-      <header className="sticky top-0 z-40 chalkboard chalk-frame">
-        <div className="max-w-[1400px] mx-auto flex items-center gap-3 px-4 lg:px-8 h-16">
-          <Logo size={34} light />
-          <div className="min-w-0">
-            <h1 className="font-display font-black text-cream text-lg leading-none truncate">{t("ad.title")}</h1>
-            <p className="text-[10px] text-amber font-bold tracking-wider truncate mt-0.5">{t("ad.protectedBadge")}</p>
-          </div>
-          <div className="ml-auto flex items-center gap-2">
-            <LangToggle dark />
-            <RefreshButton />
-            <button type="button" onClick={() => { setCreds(null); void logout(); }} className="p-2.5 rounded-xl text-cream/70 hover:text-coral hover:bg-white/8" title={t("logout")}>
-              <Icon name="logout" size={17} />
-            </button>
-          </div>
-        </div>
-        <div className="max-w-[1400px] mx-auto px-4 lg:px-8 pb-2.5 flex gap-1.5 overflow-x-auto dark-scroll">
-          {TABS.map((x) => (
-            <button type="button" key={x.id} onClick={() => setTab(x.id)}
-              className={`shrink-0 inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-full text-xs font-bold transition-all
-                ${tab === x.id ? "bg-amber text-board-2 shadow" : "bg-white/8 text-cream/70 hover:text-cream"}`}>
-              <Icon name={x.icon} size={13} /> {x.label}
-              {!!x.badge && <span className="ml-0.5 bg-coral text-white rounded-full px-1.5 text-[10px]">{x.badge}</span>}
-            </button>
-          ))}
-        </div>
-      </header>
+    <>
+      <PageHeader
+        eyebrow="Direction Générale"
+        title="Tableau de bord"
+        subtitle="Compte Administrateur Principal reconnu automatiquement (connexion directe par e-mail, sans mot de passe)."
+        actions={
+          <>
+            <Link href="/admin/abonnes?nouveau=1" className="btn-primary">
+              ➕ Ajouter une école abonnée
+            </Link>
+            <Link href="/admin/numeros-officiels" className="btn-secondary">
+              🔢 Numéros officiels
+            </Link>
+          </>
+        }
+      />
 
-      <main className="max-w-[1400px] mx-auto px-4 lg:px-8 py-6 space-y-5">
-        {/* Stats */}
-        <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 stagger">
-          <StatCard icon="building" label={t("ad.tenants")} value={stats.total} tone="#173f2f" />
-          <StatCard icon="check" label={t("ad.activeTenants")} value={stats.active} tone="#2E9E6B" />
-          <StatCard icon="mail" label={t("ad.pendingReq")} value={stats.pending} tone="#E9A23B" />
-          <StatCard icon="coins" label={t("ad.mrr")} value={money(stats.revenue)} tone="#2E5FE8" />
-        </div>
-
-        {/* Privacy + Global Sync bar */}
-        <div className="rounded-2xl border border-ok/30 bg-ok/6 px-4 py-3 flex flex-wrap items-center gap-3 anim-in">
-          <span className="p-2 rounded-xl bg-ok/15 text-ok shrink-0"><Icon name="shield" size={18} /></span>
-          <div className="grow min-w-[220px]">
-            <p className="text-sm font-bold text-board">{t("ad.privacyTitle")}</p>
-            <p className="text-xs text-inkmut mt-0.5 leading-relaxed">{t("ad.privacyMsg")}</p>
-          </div>
-          <button type="button" className="btn btn-amber btn-sm shrink-0" onClick={() => void refresh()} disabled={syncing}>
-            <Icon name="refresh" size={15} className={syncing ? "spin" : ""} /> {syncing ? t("syncing") : t("refresh")}
-          </button>
-        </div>
-
-        {/* ── SUBSCRIBERS MANAGEMENT ── */}
-        {tab === "tenants" && (
-          <div className="space-y-3 anim-fade">
-            <div className="flex flex-wrap items-start justify-between gap-3">
-              <div>
-                <h2 className="font-display font-black text-board text-2xl flex items-center gap-2">
-                  <span className="p-1.5 rounded-lg bg-board/10 text-board"><Icon name="building" size={20} /></span>
-                  {t("ad.subscribersTitle")}
-                </h2>
-                <p className="text-xs text-inkmut mt-1 max-w-2xl leading-relaxed">{t("ad.subscribersSub")}</p>
-              </div>
-              <button type="button" className="btn btn-primary" onClick={() => setAddOpen(true)}>
-                <Icon name="plus" size={16} /> {t("ad.addTenant")}
-              </button>
-            </div>
-
-            {/* Counters acting as status filters */}
-            <div className="grid grid-cols-2 lg:grid-cols-4 gap-2.5">
-              {FILTERS.map((f) => (
-                <button
-                  type="button"
-                  key={f.id}
-                  onClick={() => setTenantFilter(f.id)}
-                  className={`card px-3.5 py-3 text-left transition-all cursor-pointer hover:-translate-y-0.5 ${tenantFilter === f.id ? "ring-2 ring-offset-1" : ""}`}
-                  style={{ borderTopWidth: 4, borderTopColor: f.tone, ...(tenantFilter === f.id ? { boxShadow: `0 0 0 2px ${f.tone}55` } : {}) }}
-                >
-                  <p className="text-[10.5px] font-extrabold uppercase tracking-wider text-inkmut">{f.label}</p>
-                  <p className="font-display font-black text-2xl text-board tabular mt-0.5">{f.count}</p>
-                </button>
-              ))}
-            </div>
-
-            {/* Search */}
-            <div className="card p-3 flex flex-wrap gap-2.5 items-center">
-              <div className="relative grow min-w-[220px]">
-                <Icon name="search" size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-inkmut" />
-                <input
-                  className="input pl-9"
-                  value={tenantQuery}
-                  onChange={(e) => setTenantQuery(e.target.value)}
-                  placeholder={t("ad.searchTenant")}
-                />
-              </div>
-              {(tenantQuery || tenantFilter !== "all") && (
-                <button type="button" className="btn btn-ghost btn-sm" onClick={() => { setTenantQuery(""); setTenantFilter("all"); }}>
-                  <Icon name="x" size={13} /> {t("reset")}
-                </button>
-              )}
-              <Badge tone="board">{visibleTenants.length} / {stats.total}</Badge>
-            </div>
-
-            {admin.tenants.length === 0 ? (
-              <div className="card"><EmptyState icon="building" title={t("ad.noTenants")} /></div>
-            ) : visibleTenants.length === 0 ? (
-              <div className="card"><EmptyState icon="search" title={t("ad.noMatch")} /></div>
+      <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+        <StatCard icon="🏫" tone="indigo" label="Écoles abonnées" value={stats.subs.total} hint={`${stats.subs.actifs} actives · ${stats.subs.enAttente} en attente · ${stats.subs.suspendus} suspendues · ${stats.subs.retires} retirées`} />
+        <StatCard icon="🧑‍🎓" tone="emerald" label="Élèves enregistrés" value={stats.studentsTotal} hint="= numéros officiels attribués" />
+        <StatCard
+          icon="🧩"
+          tone="amber"
+          label="Répartition par bloc"
+          value={
+            <span className="text-base font-semibold">
+              {LEVELS.map((l) => `${LEVEL_INFO[l].short} ${stats.byLevel[l]}`).join(" · ")}
+            </span>
+          }
+          hint="Maternelle · Primaire · Secondaire"
+        />
+        <StatCard
+          icon="🧾"
+          tone="sky"
+          label="Paiements encaissés"
+          value={
+            stats.pays.length === 0 ? (
+              "0"
             ) : (
-              <>
-                <div className="card overflow-hidden hidden lg:block">
-                  <table className="w-full text-sm">
-                    <thead>
-                      <tr className="bg-board text-cream/90 text-[11px] uppercase tracking-wider">
-                        <th className="px-4 py-3 text-left">{t("se.schoolName")}</th>
-                        <th className="px-3 py-3 text-left">{t("email")} / {t("phone")}</th>
-                        <th className="px-3 py-3">{t("se.plan")}</th>
-                        <th className="px-3 py-3">{t("status")}</th>
-                        <th className="px-3 py-3 text-left">{t("ad.subEnds")}</th>
-                        <th className="px-3 py-3 text-right">{t("actions")}</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {visibleTenants.map((x, i) => {
-                        const list = parseStructures(x.structures?.length ? x.structures : x.structure);
-                        const price = subscriptionPrice(x.plan, list);
-                        return (
-                          <tr key={x.id} className={`border-t border-line/70 ${i % 2 ? "bg-parch/60" : ""}`}>
-                            <td className="px-4 py-3">
-                              <div className="flex items-center gap-2 flex-wrap">
-                                <p className="font-bold text-board">{x.name}</p>
-                                <Badge tone={x.createdByAdmin ? "board" : "gray"}>
-                                  {x.createdByAdmin ? t("ad.createdBadge") : t("ad.autoBadge")}
-                                </Badge>
-                              </div>
-                              <p className="text-[11px] text-inkmut mt-0.5">{t("ad.createdAt")} {fmtDate(x.createdAt, locale)}</p>
-                            </td>
-                            <td className="px-3 py-3 text-xs"><p className="font-semibold">{x.email}</p><p className="text-inkmut tabular">{x.phone || "—"}</p></td>
-                            <td className="px-3 py-3 text-center">
-                              <Badge tone="blue">{locale === "fr" ? PLANS.find((p) => p.id === x.plan)?.shortFr : PLANS.find((p) => p.id === x.plan)?.shortEn} · {money(price)}</Badge>
-                              <div className="flex flex-wrap gap-1 justify-center mt-1">
-                                {BLOCKS.map((b) => {
-                                  const paid = list.includes(b);
-                                  return (
-                                    <span key={b} className={`text-[9.5px] font-bold px-1.5 py-0.5 rounded ${paid ? "bg-ok/15 text-ok" : "bg-gray-100 text-gray-400 line-through"}`}>
-                                      {locale === "fr" ? STRUCTURE[b].fr : STRUCTURE[b].en}
-                                    </span>
-                                  );
-                                })}
-                              </div>
-                            </td>
-                            <td className="px-3 py-3 text-center">{statusBadge(x.status)}</td>
-                            <td className="px-3 py-3 text-xs font-medium">{fmtDate(x.subscriptionEndsAt, locale)}</td>
-                            <td className="px-3 py-3">
-                              <TenantActions x={x} busy={busyId === x.id} onStatus={setStatus} onEdit={() => setEditFor(x)} onDelete={() => setDeleteFor(x)} />
-                            </td>
-                          </tr>
-                        );
-                      })}
-                    </tbody>
-                  </table>
-                </div>
-                <div className="lg:hidden space-y-2.5">
-                  {visibleTenants.map((x) => {
-                    const list = parseStructures(x.structures?.length ? x.structures : x.structure);
-                    const price = subscriptionPrice(x.plan, list);
-                    return (
-                      <div key={x.id} className="card p-4 space-y-2.5">
-                        <div className="flex items-start justify-between gap-2">
-                          <div className="min-w-0">
-                            <div className="flex items-center gap-1.5 flex-wrap">
-                              <p className="font-bold text-sm text-board">{x.name}</p>
-                              <Badge tone={x.createdByAdmin ? "board" : "gray"}>{x.createdByAdmin ? t("ad.createdBadge") : t("ad.autoBadge")}</Badge>
-                            </div>
-                            <p className="text-[11px] text-inkmut">{x.email} · {x.phone || "—"}</p>
-                          </div>
-                          {statusBadge(x.status)}
-                        </div>
-                        <p className="text-[11.5px] text-inkmut">{t("se.plan")}: <b className="text-board">{locale === "fr" ? PLANS.find((p) => p.id === x.plan)?.shortFr : PLANS.find((p) => p.id === x.plan)?.shortEn} · {money(price)}</b> ({structureLabel(list, locale)}) · {t("ad.subEnds")}: {fmtDate(x.subscriptionEndsAt, locale)}</p>
-                        <TenantActions x={x} busy={busyId === x.id} onStatus={setStatus} onEdit={() => setEditFor(x)} onDelete={() => setDeleteFor(x)} />
-                      </div>
-                    );
-                  })}
-                </div>
-              </>
-            )}
-          </div>
-        )}
+              <span className="text-lg">{stats.pays.map((p) => formatMoney(p.total, p.currency)).join(" + ")}</span>
+            )
+          }
+          hint={`${stats.pays.reduce((a, p) => a + p.n, 0)} reçus émis`}
+        />
+      </div>
 
-        {/* ── REQUESTS ── */}
-        {tab === "requests" && (
-          <div className="space-y-3 anim-fade">
-            <h2 className="font-display font-bold text-board text-xl">{t("ad.requests")}</h2>
-            {admin.requests.length === 0 ? (
-              <div className="card"><EmptyState icon="mail" title={t("ad.noRequests")} /></div>
-            ) : (
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                {admin.requests.map((r) => {
-                  const plan = PLANS.find((p) => p.id === r.plan);
-                  return (
-                    <div key={r.id} className={`card p-4 space-y-2.5 ${r.status === "pending" ? "border-amber/50" : ""}`}>
-                      <div className="flex items-start justify-between gap-2">
-                        <div>
-                          <p className="font-bold">{r.schoolName}</p>
-                          <p className="text-[11px] text-inkmut">{r.email} · {r.phone}</p>
-                        </div>
-                        {r.status === "pending" ? <Badge tone="amber">{t("pending")}</Badge> : r.status === "approved" ? <Badge tone="green">{t("approved")}</Badge> : <Badge tone="red">{t("rejected")}</Badge>}
-                      </div>
-                      <p className="text-xs text-inkmut">
-                        {plan && <b className="text-board">{locale === "fr" ? plan.fr : plan.en} · {money(subscriptionPrice(r.plan, r.structure))}</b>} · {structureLabel(r.structure, locale)} · {fmtDate(r.createdAt, locale)}
+      <section className="mt-8">
+        <div className="mb-3 flex items-center justify-between">
+          <h2 className="font-display text-lg font-bold text-board">Demandes d&apos;abonnement en attente</h2>
+          <span className={`chip ${pending.length ? "bg-sky-100 text-sky-700" : "bg-slate-200 text-slate-600"}`}>
+            {pending.length} en attente
+          </span>
+        </div>
+        {pending.length === 0 ? (
+          <div className="card text-sm text-inkmut">
+            Aucune demande en attente. Les écoles qui créent leur compte abonné apparaissent ici avec leurs structures, leur
+            durée, le montant total et leur référence de paiement.
+          </div>
+        ) : (
+          <div className="grid gap-4 lg:grid-cols-2">
+            {pending.map((s) => {
+              const plan = getPlan(s.plan);
+              const phone = normalizePhone(s.phone, s.countryCode);
+              return (
+                <div key={s.id} className="card border-l-4 border-l-sky-500 p-5">
+                  <div className="flex flex-wrap items-start justify-between gap-2">
+                    <div>
+                      <p className="text-[11px] font-extrabold uppercase tracking-wide text-inkmut">
+                        Demande n° {s.id} · {formatDate(s.createdAt)}
                       </p>
-                      <div className="rounded-xl bg-parch border border-line/80 px-3 py-2 flex flex-wrap items-center gap-2 text-xs">
-                        <Badge tone={r.paymentMethod === "momo" ? "amber" : "coral"}>
-                          {r.paymentMethod === "momo" ? "MTN MoMo" : "Orange Money"}
-                        </Badge>
-                        <span className="text-inkmut">{t("ad.payRef")}:</span>
-                        <span className="font-mono font-bold text-board grow truncate">
-                          {r.paymentRef ? r.paymentRef : t("ad.noRef")}
-                        </span>
-                        {r.paymentRef && <CopyBtn text={r.paymentRef} />}
-                      </div>
-                      {r.status === "pending" && (
-                        <div className="flex gap-2">
-                          <button type="button" className="btn btn-primary btn-sm grow" disabled={busyId === r.id} onClick={() => approve(r, "approved")}>
-                            <Icon name="check" size={14} /> {t("ad.approve")}
-                          </button>
-                          <button type="button" className="btn btn-danger btn-sm" disabled={busyId === r.id} onClick={() => approve(r, "rejected")}>
-                            <Icon name="x" size={14} /> {t("ad.reject")}
-                          </button>
-                        </div>
-                      )}
+                      <h3 className="font-display text-lg font-bold text-board">{s.name}</h3>
+                      <p className="text-sm text-inkmut">
+                        {s.email}
+                        {s.phone ? ` · WhatsApp ${s.phone}` : ""}
+                        {s.directorName ? ` · ${s.directorName}` : ""}
+                      </p>
                     </div>
-                  );
-                })}
-              </div>
-            )}
-          </div>
-        )}
-
-        {/* ── UPDATES & AI AGENT ── */}
-        {tab === "updates" && <UpdatesTab onApproveRequest={(r) => approve(r, "approved")} />}
-
-        {/* ── SIMULATOR / SANDBOX ── */}
-        {tab === "sandbox" && (
-          <div className="space-y-4 anim-fade">
-            <div className="flex flex-wrap items-start justify-between gap-3">
-              <div>
-                <h2 className="font-display font-black text-board text-2xl flex items-center gap-2">
-                  <span className="p-1.5 rounded-lg bg-coral/15 text-coral"><Icon name="flask" size={20} /></span>
-                  {t("ad.simModuleTitle")}
-                </h2>
-                <p className="text-xs text-inkmut mt-1 max-w-2xl leading-relaxed">{t("ad.simModuleSub")}</p>
-              </div>
-              <div className="flex flex-wrap gap-2">
-                {(["desktop", "mobile"] as const).map((device) => (
-                  <button
-                    type="button"
-                    key={device}
-                    onClick={() => setSandboxDevice(device)}
-                    className={`btn btn-sm ${sandboxDevice === device ? "btn-primary" : "btn-ghost"}`}
-                  >
-                    <Icon name={device === "desktop" ? "dash" : "phone"} size={14} />
-                    {device === "desktop" ? t("ad.simDesktop") : t("ad.simMobile")}
-                  </button>
-                ))}
-                <button type="button" className="btn btn-danger btn-sm" onClick={() => setSandboxResetOpen(true)} disabled={sandboxBusy}>
-                  <Icon name="refresh" size={14} className={sandboxBusy ? "spin" : ""} /> {t("se.sandboxReset")}
-                </button>
-              </div>
-            </div>
-
-            {/* Isolation guarantee */}
-            <div className="rounded-2xl border-2 border-ok/40 bg-ok/8 px-4 py-3 flex items-start gap-3">
-              <span className="p-2 rounded-xl bg-ok/15 text-ok shrink-0"><Icon name="shield" size={18} /></span>
-              <div>
-                <p className="text-sm font-bold text-board">{t("ad.simIsolated")}</p>
-                <p className="text-[11px] text-inkmut mt-0.5">{t("ad.simNoReal", { n: stats.total })}</p>
-              </div>
-            </div>
-
-            {/* Persona switcher */}
-            <div className="card p-3.5 flex flex-wrap items-center gap-2">
-              <span className="text-[10.5px] font-extrabold uppercase tracking-wider text-inkmut">{t("ad.simPersona")} :</span>
-              <button
-                type="button"
-                onClick={() => setSandboxPersona("all")}
-                className={`chip border transition-all cursor-pointer ${sandboxPersona === "all" ? "bg-board text-white border-board shadow" : "bg-parch text-ink border-line hover:border-board"}`}
-              >
-                {t("ad.simAll")}
-              </button>
-              {BLOCKS.map((b) => (
-                <button
-                  type="button"
-                  key={b}
-                  onClick={() => setSandboxPersona(b)}
-                  className={`chip border transition-all cursor-pointer ${sandboxPersona === b ? "text-white border-transparent shadow" : "bg-white text-ink hover:border-board"}`}
-                  style={sandboxPersona === b ? { background: BLOCK_COLORS[b] } : { borderColor: BLOCK_COLORS[b] + "70" }}
-                >
-                  <span className="w-2 h-2 rounded-full" style={{ background: sandboxPersona === b ? "#fff" : BLOCK_COLORS[b] }} />
-                  {locale === "fr" ? STRUCTURE[b].fr : STRUCTURE[b].en}
-                </button>
-              ))}
-            </div>
-
-            {/* Simulation data counters */}
-            <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
-              <StatCard icon="users" label={t("ad.simStats")} value={data?.students.length ?? 0} tone="#1b4fd6" sub={`${t("students")} ${t("ad.simStats").toLowerCase()}`} />
-              <StatCard icon="building" label={t("ca.allClasses")} value={data?.classes.length ?? 0} tone="#0f3325" />
-              <StatCard icon="book" label={t("gr.exportSheet")} value={data?.grades.length ?? 0} tone="#ad1e67" />
-              <StatCard icon="coins" label={t("ca.balance")} value={money((data?.payments ?? []).reduce((a, p) => a + p.amount, 0))} tone="#b86f00" />
-            </div>
-
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-              {BLOCKS.filter((b) => sandboxPersona === "all" || sandboxPersona === b).map((b) => {
-                const cls = data?.classes.filter((c) => c.block === b) ?? [];
-                const count = data?.students.filter((s) => cls.some((c) => c.id === s.classId)).length ?? 0;
-                return (
-                  <div key={b} className="card p-4 border-t-4" style={{ borderTopColor: BLOCK_COLORS[b] }}>
-                    <p className="font-display font-bold text-board">{locale === "fr" ? STRUCTURE[b].fr : STRUCTURE[b].en}</p>
-                    <p className="text-[11px] text-inkmut mt-0.5">{cls.length} {locale === "fr" ? "classes" : "classes"} · {count} {t("students")}</p>
-                    <div className="flex flex-wrap gap-1 mt-2">
-                      {cls.slice(0, 8).map((c) => <span key={c.id} className="chip bg-board/8 text-board border border-line">{classLabel(c, locale)}</span>)}
-                      {cls.length > 8 && <span className="chip bg-board/8 text-board">+{cls.length - 8}</span>}
-                    </div>
+                    <StatusBadge status={s.status} />
                   </div>
-                );
-              })}
-            </div>
-
-            <div className="rounded-2xl border-2 border-dashed border-coral/40 bg-coral/5 px-4 py-3 text-sm text-ink flex items-center gap-2.5">
-              <Icon name="info" size={18} className="text-coral shrink-0" />
-              <span><b>{t("ad.simViewing")}</b> — {t("ad.sandboxMsg")}</span>
-            </div>
-
-            {/* Live subscriber interface (sandbox tenant only) */}
-            <div className={`mx-auto w-full transition-all ${sandboxDevice === "mobile" ? "max-w-[420px]" : ""}`}>
-              <div className={`card overflow-hidden ${sandboxDevice === "mobile" ? "rounded-[28px] border-[6px] border-board-2 shadow-2xl" : ""}`}>
-                <div className="flex items-center justify-between gap-2 px-4 py-2 bg-board-2 text-cream/80">
-                  <span className="text-[10.5px] font-bold uppercase tracking-widest text-amber">{t("ad.simulation")}</span>
-                  <span className="text-[10px] font-mono">{sandboxDevice === "mobile" ? "375 × 812" : "1440 × auto"}</span>
+                  <dl className="mt-3 grid grid-cols-2 gap-x-4 gap-y-2 text-sm">
+                    <div>
+                      <dt className="label">Structures</dt>
+                      <dd>
+                        <FormulaBadges school={s} showLocked={false} />
+                      </dd>
+                    </div>
+                    <div>
+                      <dt className="label">Durée</dt>
+                      <dd className="font-semibold text-ink">{plan?.label ?? "—"}</dd>
+                    </div>
+                    <div>
+                      <dt className="label">Montant total</dt>
+                      <dd className="font-display text-xl font-black text-board">{formatNumber(s.amountDue ?? 0)} FCFA</dd>
+                    </div>
+                    <div>
+                      <dt className="label">Paiement</dt>
+                      <dd className="font-semibold text-ink">
+                        {s.paymentMethod ?? "—"}
+                        <span className="block font-mono text-xs font-normal text-inkmut">{s.paymentReference ?? "référence non fournie"}</span>
+                      </dd>
+                    </div>
+                  </dl>
+                  <div className="mt-4 flex flex-wrap gap-2">
+                    <form action={approveSubscriptionRequest.bind(null, s.id)}>
+                      <input type="hidden" name="redirectTo" value="/admin" />
+                      <ConfirmButton message={`Valider et activer immédiatement « ${s.name} » (${formulaLabel(s)}) ?`} className="btn-school">
+                        ✅ Valider / Admettre
+                      </ConfirmButton>
+                    </form>
+                    {phone && (
+                      <WhatsAppLink
+                        href={whatsappUrl(phone, `Bonjour, Direction Générale Scolaria : nous avons bien reçu la demande d'abonnement de ${s.name} (${formulaLabel(s)}, ${formatNumber(s.amountDue ?? 0)} FCFA).`)}
+                        className="btn-whatsapp"
+                      >
+                        💬 Contacter
+                      </WhatsAppLink>
+                    )}
+                    <Link href={`/admin/abonnes/${s.id}`} className="btn-secondary">
+                      Détails
+                    </Link>
+                    <form action={rejectSubscriptionRequest.bind(null, s.id)}>
+                      <input type="hidden" name="redirectTo" value="/admin" />
+                      <ConfirmButton message={`Refuser et supprimer la demande de « ${s.name} » ?`} className="btn-danger">
+                        Refuser
+                      </ConfirmButton>
+                    </form>
+                  </div>
                 </div>
-                <Workspace embedded />
-              </div>
-            </div>
+              );
+            })}
           </div>
         )}
-      </main>
+      </section>
 
-      <Confirm
-        open={sandboxResetOpen}
-        onClose={() => setSandboxResetOpen(false)}
-        title={t("se.sandboxReset")}
-        confirmLabel={t("confirm")}
-        message={t("se.sandboxResetMsg")}
-        onConfirm={() => void resetSandbox()}
-      />
-      <AddTenantModal open={addOpen} onClose={() => setAddOpen(false)} onCreated={(c) => { setAddOpen(false); setCreds(c); }} />
-      <EditTenantModal x={editFor} onClose={() => setEditFor(null)} onResetPassword={(c) => { setEditFor(null); setCreds(c); }} />
-      <Confirm open={!!deleteFor} onClose={() => setDeleteFor(null)} title={t("ad.deleteTenant")} confirmLabel={t("delete")}
-        message={deleteFor ? t("ad.confirmDeleteTenant", { name: deleteFor.name }) : ""}
-        onConfirm={async () => {
-          if (!deleteFor) return;
-          const res = await act("admin.tenant.delete", { id: deleteFor.id });
-          setDeleteFor(null);
-          toast(res.ok ? t("savedOk") : t("errorGeneric"), res.ok ? "success" : "error");
-        }} />
-      <CredsModal creds={creds} onClose={() => setCreds(null)} />
-      <ToastHost />
-      {syncing && <div className="fixed top-0 inset-x-0 h-0.5 bg-amber z-[80] animate-pulse" />}
-    </div>
-  );
-}
-
-/* ── Dedicated strict empty Admin login gate ── */
-function AdminLoginGate({ onLogin }: {
-  onLogin: (email: string, password: string) => Promise<{ role: "tenant" | "admin"; structures: string[] | null } | null>;
-}) {
-  const { t } = useI18n();
-  const router = useRouter();
-  const [email, setEmail] = useState("");
-  const [password, setPassword] = useState("");
-  const [busy, setBusy] = useState(false);
-  const [err, setErr] = useState(false);
-
-  // Guarantee blank fields on every render/mount
-  useEffect(() => {
-    setEmail("");
-    setPassword("");
-    setErr(false);
-  }, []);
-
-  const submit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    // Only the e-mail is mandatory: the principal administrator can sign in
-    // directly by e-mail without a password.
-    if (!email.trim()) { setErr(true); return; }
-    setBusy(true);
-    setErr(false);
-    const r = await onLogin(email, password);
-    setBusy(false);
-    if (r?.role === "admin") {
-      setEmail("");
-      setPassword("");
-    } else if (r?.role === "tenant") {
-      setEmail("");
-      setPassword("");
-      router.replace("/app");
-    } else {
-      setPassword("");
-      setErr(true);
-    }
-  };
-
-  /** Guaranteed one-click principal administrator access (survives any DB reset).
-      Instant: the server answers from an in-memory session, no database.
-      The client redirects immediately and the dashboard picks up the session. */
-  const directAdmin = () => {
-    setBusy(true);
-    setErr(false);
-    setEmail("etsmfiyafils@gmail.com");
-    setPassword("");
-    void onLogin("etsmfiyafils@gmail.com", ""); // fire-and-forget, ~60 ms in-memory
-    router.push("/admin?direct=1");
-  };
-
-  return (
-    <div className="min-h-dvh flex flex-col bg-paper">
-      <header className="px-4 lg:px-8 h-16 flex items-center justify-between border-b border-line bg-paper/85 backdrop-blur">
-        <button type="button" onClick={() => router.push("/")} className="btn btn-ghost btn-sm">
-          <Icon name="arrowL" size={15} /> {t("pub.backHome")}
-        </button>
-        <LangToggle />
-      </header>
-      <main className="flex-1 flex items-center justify-center p-4">
-        <div className="w-full max-w-md chalkboard chalk-frame rounded-3xl p-6 sm:p-8 shadow-2xl anim-in">
-          <div className="flex items-center gap-3 mb-4">
-            <Logo size={40} light />
-            <div>
-              <p className="text-[10px] font-bold uppercase tracking-[0.22em] text-amber">{t("ad.protectedBadge")}</p>
-              <h1 className="font-display font-black text-cream text-2xl leading-tight">{t("ad.loginTitle")}</h1>
-            </div>
+      <section className="mt-8">
+        <div className="mb-3 flex items-center justify-between">
+          <h2 className="font-display text-lg font-bold text-board">Abonnés récents</h2>
+          <Link href="/admin/abonnes" className="text-sm font-semibold text-indigo-700 hover:underline">
+            Gérer tous les abonnés →
+          </Link>
+        </div>
+        {recentSubscribers.length === 0 ? (
+          <div className="card text-sm text-slate-600">
+            Aucune école abonnée pour le moment.{" "}
+            <Link href="/admin/abonnes?nouveau=1" className="font-semibold text-indigo-700 hover:underline">
+              Ajoutez la première école
+            </Link>
+            .
           </div>
-          <p className="text-xs text-cream/70 mb-5">{t("ad.loginSub")}</p>
-          <form onSubmit={submit} autoComplete="off" className="space-y-4">
-            <div>
-              <label className="label !text-cream/65">{t("email")}</label>
-              <input
-                type="email"
-                name="sa_ident_manual"
-                className="input !bg-white/10 !border-white/20 !text-cream placeholder:!text-cream/30"
-                value={email}
-                onChange={(e) => { setEmail(e.target.value); setErr(false); }}
-                placeholder="admin@exemple.com"
-                autoComplete="off"
-                data-lpignore="true"
-                data-1p-ignore="true"
-                data-form-type="other"
-                spellCheck={false}
-                required
-              />
-            </div>
-            <div>
-              <label className="label !text-cream/65">{t("ad.pwdOptional")}</label>
-              <input
-                type="password"
-                name="sa_secret_manual"
-                className="input !bg-white/10 !border-white/20 !text-cream placeholder:!text-cream/30"
-                value={password}
-                onChange={(e) => { setPassword(e.target.value); setErr(false); }}
-                placeholder="••••••••"
-                autoComplete="new-password"
-                data-lpignore="true"
-                data-1p-ignore="true"
-                data-form-type="other"
-              />
-            </div>
-            {err && (
-              <p className="text-coral text-xs font-bold flex items-center gap-1.5 anim-pop">
-                <Icon name="alert" size={14} /> {t("ad.invalid")}
-              </p>
-            )}
-            <button type="submit" className="btn btn-amber w-full text-base py-3.5" disabled={busy}>
-              <Icon name={busy ? "refresh" : "shield"} size={17} className={busy ? "spin" : ""} /> {t("login")}
-            </button>
-            <button type="button" onClick={() => void directAdmin()} disabled={busy}
-              className="w-full inline-flex items-center justify-center gap-2 rounded-xl border-2 border-amber/70 bg-amber/15 px-4 py-2.5 text-xs font-extrabold text-amber transition-all hover:bg-amber hover:text-board-2 disabled:opacity-60">
-              <Icon name="key" size={14} className={busy ? "spin" : ""} /> {t("pub.adminDirectBtn")}
-            </button>
-          </form>
-          <p className="mt-4 text-[11px] text-cream/55 flex items-start gap-2 leading-relaxed">
-            <Icon name="shield" size={13} className="shrink-0 mt-0.5 text-amber" />
-            <span>{t("ad.loginHint")}</span>
-          </p>
-        </div>
-      </main>
-    </div>
-  );
-}
-
-/* ── Row actions ── */
-function TenantActions({ x, busy, onStatus, onEdit, onDelete }: {
-  x: AdminTenant; busy: boolean;
-  onStatus: (x: AdminTenant, s: string) => void; onEdit: () => void; onDelete: () => void;
-}) {
-  const { t } = useI18n();
-  const cell = "inline-flex items-center gap-1 rounded-lg border px-2 py-1.5 text-[11px] font-bold transition-all disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer";
-  return (
-    <div className="flex flex-wrap gap-1.5 lg:justify-end">
-      {/* Suspendre (temporary) */}
-      <button
-        type="button"
-        disabled={busy || x.status !== "active"}
-        onClick={() => onStatus(x, "suspended")}
-        title={t("ad.suspend")}
-        className={`${cell} border-amber/50 bg-amber/10 text-amber-2 hover:bg-amber/20`}
-      >
-        <Icon name="pause" size={12} /> {t("ad.suspend")}
-      </button>
-
-      {/* Réadmettre / Réactiver */}
-      <button
-        type="button"
-        disabled={busy || x.status === "active"}
-        onClick={() => onStatus(x, "active")}
-        title={x.status === "revoked" ? t("ad.readmit") : t("ad.activate")}
-        className={`${cell} border-ok/50 bg-ok/12 text-ok hover:bg-ok/20`}
-      >
-        <Icon name="play" size={12} /> {x.status === "revoked" ? t("ad.readmit") : t("ad.activate")}
-      </button>
-
-      {/* Retirer */}
-      <button
-        type="button"
-        disabled={busy || x.status === "revoked"}
-        onClick={() => onStatus(x, "revoked")}
-        title={t("ad.remove")}
-        className={`${cell} border-line bg-white text-inkmut hover:border-board hover:text-board`}
-      >
-        <Icon name="x" size={12} /> {t("ad.remove")}
-      </button>
-
-      {/* Éditer */}
-      <button
-        type="button"
-        onClick={onEdit}
-        title={t("ad.editContact")}
-        className={`${cell} border-line bg-white text-board hover:border-board`}
-      >
-        <Icon name="pen" size={12} /> {t("edit")}
-      </button>
-
-      {/* Supprimer définitivement */}
-      <button
-        type="button"
-        onClick={onDelete}
-        title={t("ad.deleteTenant")}
-        className={`${cell} border-danger/40 bg-danger/10 text-danger hover:bg-danger/20`}
-      >
-        <Icon name="trash" size={12} /> {t("delete")}
-      </button>
-    </div>
-  );
-}
-
-/* ── Multi-structure picker helper ── */
-function StructureCheckboxes({ value, onChange, locale }: { value: Block[]; onChange: (v: Block[]) => void; locale: "fr" | "en" }) {
-  const toggle = (b: Block) => {
-    if (value.includes(b)) {
-      if (value.length > 1) onChange(value.filter((x) => x !== b));
-    } else {
-      onChange(BLOCKS.filter((x) => value.includes(x) || x === b));
-    }
-  };
-  return (
-    <div className="grid grid-cols-3 gap-2">
-      {BLOCKS.map((b) => {
-        const on = value.includes(b);
-        return (
-          <button type="button" key={b} onClick={() => toggle(b)}
-            className={`rounded-xl border-2 px-2.5 py-2 text-left text-xs font-bold transition-all cursor-pointer ${on ? "border-board bg-board text-white shadow" : "border-line bg-parch text-inkmut hover:border-board"}`}>
-            <div className="flex items-center justify-between gap-1">
-              <span>{locale === "fr" ? STRUCTURE[b].fr : STRUCTURE[b].en}</span>
-              <span>{on ? "✓" : "+"}</span>
-            </div>
-          </button>
-        );
-      })}
-    </div>
-  );
-}
-
-/* ── Add tenant ── */
-function AddTenantModal({ open, onClose, onCreated }: {
-  open: boolean; onClose: () => void;
-  onCreated: (c: { email: string; password?: string; phone?: string; schoolName?: string }) => void;
-}) {
-  const { act, toast } = useApp();
-  const { t, locale } = useI18n();
-  const [f, setF] = useState({ name: "", email: "", phone: "", plan: "monthly" });
-  const [structures, setStructures] = useState<Block[]>(["nursery", "primary", "secondary"]);
-  const [busy, setBusy] = useState(false);
-  const submit = async () => {
-    if (!f.name.trim() || !f.email.trim()) { toast(t("en.required"), "error"); return; }
-    setBusy(true);
-    const res = await act("admin.tenant.create", { ...f, structures });
-    setBusy(false);
-    if (res.ok) {
-      toast(t("ad.tenantCreated"));
-      onCreated({ email: f.email, password: String(res.result?.password ?? ""), phone: f.phone, schoolName: f.name });
-      setF({ name: "", email: "", phone: "", plan: "monthly" });
-      setStructures(["nursery", "primary", "secondary"]);
-    } else toast(res.error === "emailTaken" ? "E-mail déjà utilisé / Email already used" : t("errorGeneric"), "error");
-  };
-  return (
-    <Modal open={open} onClose={onClose} title={t("ad.addTenant")}
-      footer={<>
-        <button type="button" className="btn btn-ghost" onClick={onClose}>{t("cancel")}</button>
-        <button type="button" className="btn btn-primary" onClick={submit} disabled={busy}><Icon name="plus" size={15} /> {t("add")}</button>
-      </>}>
-      <div className="space-y-3.5">
-        <Field label={t("se.schoolName")}><input className="input" value={f.name} onChange={(e) => setF({ ...f, name: e.target.value })} /></Field>
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5">
-          <Field label={t("email")}><input className="input" type="email" value={f.email} onChange={(e) => setF({ ...f, email: e.target.value })} /></Field>
-          <Field label={t("phone")}><input className="input tabular" value={f.phone} onChange={(e) => setF({ ...f, phone: e.target.value })} /></Field>
-        </div>
-        <Field label={t("pub.chooseStructure")}>
-          <StructureCheckboxes value={structures} onChange={setStructures} locale={locale} />
-        </Field>
-        <Field label={t("se.plan")}>
-          <select className="input" value={f.plan} onChange={(e) => setF({ ...f, plan: e.target.value })}>
-            {PLANS.map((p) => <option key={p.id} value={p.id}>{locale === "fr" ? p.fr : p.en} — {money(subscriptionPrice(p.id, structures))}</option>)}
-          </select>
-        </Field>
-      </div>
-    </Modal>
-  );
-}
-
-/* ── Edit contacts & credentials (contact details editable only for admin-created subscribers) ── */
-function EditTenantModal({ x, onClose, onResetPassword }: {
-  x: AdminTenant | null; onClose: () => void;
-  onResetPassword: (c: { email: string; password?: string; phone?: string; schoolName?: string }) => void;
-}) {
-  const { act, toast } = useApp();
-  const { t, locale } = useI18n();
-  const [name, setName] = useState("");
-  const [phone, setPhone] = useState("");
-  const [email, setEmail] = useState("");
-  const [plan, setPlan] = useState("monthly");
-  const [structures, setStructures] = useState<Block[]>(["nursery", "primary", "secondary"]);
-  const [busy, setBusy] = useState(false);
-
-  useEffect(() => {
-    if (x) {
-      setName(x.name);
-      setPhone(x.phone);
-      setEmail(x.email);
-      setPlan(x.plan);
-      setStructures(parseStructures(x.structures?.length ? x.structures : x.structure));
-    }
-  }, [x]);
-
-  const canEditContacts = !!x?.createdByAdmin;
-
-  const submit = async () => {
-    if (!x) return;
-    setBusy(true);
-    const payload = canEditContacts
-      ? { id: x.id, name, phone, email, plan, structures }
-      : { id: x.id, plan, structures };
-    const res = await act("admin.tenant.update", payload);
-    setBusy(false);
-    if (res.ok) { toast(t("ad.contactSaved")); onClose(); }
-    else toast(t("errorGeneric"), "error");
-  };
-  const resetPw = async () => {
-    if (!x) return;
-    setBusy(true);
-    const res = await act("admin.tenant.update", { id: x.id, resetPassword: true });
-    setBusy(false);
-    if (res.ok && res.result?.password) {
-      onResetPassword({
-        email: String(res.result.email), password: String(res.result.password),
-        phone: String(res.result.phone ?? phone), schoolName: String(res.result.schoolName ?? name),
-      });
-    } else toast(t("errorGeneric"), "error");
-  };
-  return (
-    <Modal open={!!x} onClose={onClose} title={`${t("ad.editContact")} — ${x?.name ?? ""}`}
-      footer={<>
-        <button type="button" className="btn btn-amber btn-sm mr-auto" onClick={resetPw} disabled={busy}><Icon name="key" size={14} /> {t("ad.resetPw")}</button>
-        <button type="button" className="btn btn-ghost" onClick={onClose}>{t("cancel")}</button>
-        <button type="button" className="btn btn-primary" onClick={submit} disabled={busy}><Icon name="check" size={15} /> {t("save")}</button>
-      </>}>
-      <div className="space-y-3.5">
-        {!canEditContacts && (
-          <p className="text-xs text-amber-2 bg-amber/12 border border-amber/35 rounded-xl px-3 py-2 flex items-center gap-2">
-            <Icon name="shield" size={14} className="shrink-0" /> {t("ad.autonomousNote")}
-          </p>
+        ) : (
+          <div className="overflow-x-auto rounded-2xl bg-white shadow-sm ring-1 ring-slate-200">
+            <table className="tbl">
+              <thead>
+                <tr>
+                  <th>École</th>
+                  <th>Formule</th>
+                  <th>Élèves</th>
+                  <th>Statut</th>
+                  <th>Depuis</th>
+                  <th className="text-right">Actions</th>
+                </tr>
+              </thead>
+              <tbody>
+                {recentSubscribers.map((s) => (
+                  <tr key={s.id} className="hover:bg-slate-50/70">
+                    <td>
+                      <Link href={`/admin/abonnes/${s.id}`} className="font-semibold text-slate-900 hover:underline">
+                        {s.name}
+                      </Link>
+                      <div className="text-xs text-slate-500">
+                        {s.email} · <span className="font-mono">{s.code}</span>
+                      </div>
+                    </td>
+                    <td>
+                      <FormulaBadges school={s} />
+                    </td>
+                    <td className="font-semibold">{s.studentCount}</td>
+                    <td>
+                      <StatusBadge status={s.status} />
+                    </td>
+                    <td className="whitespace-nowrap">{formatDate(s.createdAt, "short")}</td>
+                    <td>
+                      <div className="flex justify-end gap-2">
+                        <Link href={`/ecoles/${s.id}`} className="btn-secondary btn-sm">
+                          Ouvrir
+                        </Link>
+                        {s.status === "en_attente" ? (
+                          <form action={approveSubscriptionRequest.bind(null, s.id)}>
+                            <input type="hidden" name="redirectTo" value="/admin" />
+                            <ConfirmButton message={`Valider et activer « ${s.name} » ?`} className="btn-school btn-sm">
+                              Valider / Admettre
+                            </ConfirmButton>
+                          </form>
+                        ) : s.status === "actif" ? (
+                          <form action={setSubscriberStatus.bind(null, s.id, "suspendu")}>
+                            <input type="hidden" name="redirectTo" value="/admin" />
+                            <ConfirmButton message={`Suspendre l'accès de « ${s.name} » ?`} className="btn-warning btn-sm">
+                              Suspendre
+                            </ConfirmButton>
+                          </form>
+                        ) : (
+                          <form action={setSubscriberStatus.bind(null, s.id, "actif")}>
+                            <input type="hidden" name="redirectTo" value="/admin" />
+                            <ConfirmButton message={`Réadmettre « ${s.name} » ?`} className="btn-school btn-sm">
+                              Réadmettre
+                            </ConfirmButton>
+                          </form>
+                        )}
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
         )}
-        <Field label={t("se.schoolName")}><input className="input" value={name} disabled={!canEditContacts} onChange={(e) => setName(e.target.value)} /></Field>
-        <Field label={t("phone")}><input className="input tabular" value={phone} disabled={!canEditContacts} onChange={(e) => setPhone(e.target.value)} /></Field>
-        <Field label={t("email")}><input className="input" value={email} disabled={!canEditContacts} onChange={(e) => setEmail(e.target.value)} /></Field>
-        <Field label={t("pub.chooseStructure")}>
-          <StructureCheckboxes value={structures} onChange={setStructures} locale={locale} />
-        </Field>
-        <Field label={t("se.plan")}>
-          <select className="input" value={plan} onChange={(e) => setPlan(e.target.value)}>
-            {PLANS.map((p) => <option key={p.id} value={p.id}>{locale === "fr" ? p.fr : p.en} — {money(subscriptionPrice(p.id, structures))}</option>)}
-          </select>
-        </Field>
-      </div>
-    </Modal>
-  );
-}
+      </section>
 
-/* ── Generated credentials ── */
-function CredsModal({ creds, onClose }: { creds: { email: string; password?: string; phone?: string; schoolName?: string } | null; onClose: () => void }) {
-  const { t, locale } = useI18n();
-  if (!creds) return null;
-  const msg = locale === "fr"
-    ? `🎓 *Scolaria — ${PLATFORM.company}*\nVotre espace école est prêt${creds.schoolName ? ` pour ${creds.schoolName}` : ""} !\n\n🔗 Connexion : ${typeof window !== "undefined" ? window.location.origin : ""}\n📧 E-mail : ${creds.email}\n🔑 Mot de passe : ${creds.password}\n\nBienvenue ! Changez vos coordonnées dans Paramètres.`
-    : `🎓 *Scolaria — ${PLATFORM.company}*\nYour school space is ready${creds.schoolName ? ` for ${creds.schoolName}` : ""}!\n\n🔗 Sign-in: ${typeof window !== "undefined" ? window.location.origin : ""}\n📧 Email: ${creds.email}\n🔑 Password: ${creds.password}\n\nWelcome! Update your details in Settings.`;
-  return (
-    <Modal open={!!creds} onClose={onClose} title={t("ad.generatedCreds")}
-      footer={<button className="btn btn-primary" onClick={onClose}>{t("close")}</button>}>
-      <div className="rounded-xl chalkboard text-cream p-4 font-mono text-sm space-y-2">
-        <p className="flex items-center justify-between gap-2"><span>📧 {creds.email}</span><CopyBtn text={creds.email} /></p>
-        {creds.password && <p className="flex items-center justify-between gap-2"><span>🔑 {creds.password}</span><CopyBtn text={creds.password} /></p>}
-      </div>
-      {creds.phone && (
-        <a className="btn btn-wa w-full mt-4" target="_blank" rel="noreferrer" href={waLink(creds.phone, msg)}>
-          <WaIcon size={16} /> {t("ad.sendCreds")}
-        </a>
-      )}
-    </Modal>
-  );
-}
-
-/* ── Updates publication & AI Code Agent ── */
-function UpdatesTab({ onApproveRequest }: { onApproveRequest: (r: SubRequestRow) => Promise<void> }) {
-  const { admin, act, toast } = useApp();
-  const { t, locale } = useI18n();
-  const [f, setF] = useState({ version: "", titleFr: "", titleEn: "", notesFr: "", notesEn: "" });
-  const [busy, setBusy] = useState(false);
-  if (!admin) return null;
-  const pendingRequests = admin.requests.filter((r) => r.status === "pending");
-
-  const publish = async (status: "deployed" | "draft", payload = f) => {
-    if (!payload.version.trim() || !payload.titleFr.trim()) { toast(t("en.required"), "error"); return; }
-    setBusy(true);
-    const res = await act("admin.publish", { ...payload, status });
-    setBusy(false);
-    if (res.ok) {
-      if (status === "deployed") toast(t("ad.published", { v: payload.version }));
-      else toast(t("savedOk"));
-      setF({ version: "", titleFr: "", titleEn: "", notesFr: "", notesEn: "" });
-    } else toast(t("errorGeneric"), "error");
-  };
-  const deployDraft = async (id: string, version: string) => {
-    setBusy(true);
-    const res = await act("admin.publish.deploy", { id });
-    setBusy(false);
-    toast(res.ok ? t("ad.published", { v: version }) : t("errorGeneric"), res.ok ? "success" : "error");
-  };
-  const approveAll = async () => {
-    setBusy(true);
-    const res = await act("admin.requests.approveAll");
-    setBusy(false);
-    toast(res.ok ? t("savedOk") : t("errorGeneric"), res.ok ? "success" : "error");
-  };
-
-  return (
-    <div className="space-y-4 anim-fade">
-      <AiCodeAssistant
-        pendingRequests={pendingRequests}
-        onApproveRequest={onApproveRequest}
-        onApproveAll={approveAll}
-        onPrefillRelease={(v) => setF(v)}
-        onPublishDirect={(v) => publish("deployed", v)}
-      />
-      <div className="grid grid-cols-1 xl:grid-cols-2 gap-4 items-start">
-      <div className="card p-5">
-        <h2 className="font-display font-bold text-board text-lg flex items-center gap-2"><Icon name="rocket" size={18} className="text-coral" /> {t("ad.publish")}</h2>
-        <div className="space-y-3.5 mt-4">
-          <Field label={t("ad.version")}><input className="input font-mono" placeholder="2.6.0" value={f.version} onChange={(e) => setF({ ...f, version: e.target.value })} /></Field>
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5">
-            <Field label={t("ad.titleFr")}><input className="input" value={f.titleFr} onChange={(e) => setF({ ...f, titleFr: e.target.value })} /></Field>
-            <Field label={t("ad.titleEn")}><input className="input" value={f.titleEn} onChange={(e) => setF({ ...f, titleEn: e.target.value })} /></Field>
-          </div>
-          <Field label={t("ad.notesFr")}><textarea className="input min-h-[70px]" value={f.notesFr} onChange={(e) => setF({ ...f, notesFr: e.target.value })} /></Field>
-          <Field label={t("ad.notesEn")}><textarea className="input min-h-[70px]" value={f.notesEn} onChange={(e) => setF({ ...f, notesEn: e.target.value })} /></Field>
-          <div className="flex gap-2">
-            <button type="button" className="btn btn-ghost" disabled={busy} onClick={() => publish("draft")}>{t("ad.draft")}</button>
-            <button type="button" className="btn btn-primary grow" disabled={busy} onClick={() => publish("deployed")}>
-              <Icon name={busy ? "refresh" : "rocket"} size={16} className={busy ? "spin" : ""} /> {t("ad.publish")}
-            </button>
-          </div>
+      <section className="mt-8">
+        <div className="mb-3 flex items-center justify-between">
+          <h2 className="font-display text-lg font-bold text-board">Derniers élèves enregistrés</h2>
+          <Link href="/admin/eleves" className="text-sm font-semibold text-indigo-700 hover:underline">
+            Voir tous les élèves →
+          </Link>
         </div>
-      </div>
-      <div className="card p-5">
-        <h2 className="font-display font-bold text-board text-lg mb-4">{t("ad.updateHistory")}</h2>
-        <ul className="space-y-3">
-          {admin.updates.map((u) => (
-            <li key={u.id} className="rounded-xl border border-line bg-white p-3.5">
-              <div className="flex items-center gap-2 flex-wrap">
-                <span className="font-mono font-bold text-board">v{u.version}</span>
-                {u.status === "deployed" ? <Badge tone="green">{t("ad.deployed")}</Badge> : <Badge tone="gray">{t("ad.draft")}</Badge>}
-                <span className="text-[10.5px] text-inkmut ml-auto">{fmtDate(u.deployedAt ?? u.createdAt, locale)}</span>
-              </div>
-              <p className="text-sm font-semibold mt-1">{locale === "fr" ? u.titleFr : u.titleEn}</p>
-              <p className="text-xs text-inkmut mt-0.5">{locale === "fr" ? u.notesFr : u.notesEn}</p>
-              {u.status === "draft" && (
-                <button className="btn btn-amber btn-sm mt-2.5" disabled={busy} onClick={() => deployDraft(u.id, u.version)}>
-                  <Icon name="rocket" size={13} /> {t("ad.deployNow")}
-                </button>
-              )}
-            </li>
-          ))}
-        </ul>
-      </div>
-      </div>
-    </div>
+        <StudentsTable rows={recentStudents} showSchool />
+      </section>
+    </>
   );
 }

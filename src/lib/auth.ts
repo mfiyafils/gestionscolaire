@@ -1,191 +1,108 @@
-import { randomBytes, scryptSync, timingSafeEqual } from "crypto";
+import { createHmac, timingSafeEqual } from "node:crypto";
 import { cookies } from "next/headers";
-import { db } from "@/db";
-import { sessions, tenants } from "@/db/schema";
-import { eq } from "drizzle-orm";
-export const SESSION_COOKIE = "scolaria_session";
-const ADMIN_EMAIL = (process.env.ADMIN_EMAIL || "etsmfiyafils@gmail.com").trim().toLowerCase();
-const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || "admin2026";
-const WEEK = 7 * 24 * 3600;
-const ADMIN_TTL = 2 * 3600; // 2 hours max for admin sessions
+import { notFound, redirect } from "next/navigation";
+import { ADMIN_EMAIL } from "@/lib/constants";
+import { getSchoolById } from "@/lib/data";
+import { normalizeEmail } from "@/lib/utils";
 
-/**
- * In-memory administrator sessions (256-bit random tokens, httpOnly cookie).
- * The principal administrator signs in INSTANTLY — no database round-trip,
- * no seeding, no external network call — so access is guaranteed even on a
- * cold / reset / in-memory Render instance. Tokens live in server memory and
- * are pruned on expiry.
- */
-const adminMemorySessions = new Map<string, number>();
-const ADMIN_SESSION_LIMIT = 100;
+export type Session =
+  | { role: "admin"; email: string }
+  | { role: "school"; email: string; schoolId: number };
 
-function pruneAdminSessions() {
-  const now = Date.now();
-  for (const [token, expires] of adminMemorySessions) {
-    if (expires <= now) adminMemorySessions.delete(token);
-  }
-  while (adminMemorySessions.size > ADMIN_SESSION_LIMIT) {
-    const oldest = adminMemorySessions.keys().next().value;
-    if (oldest === undefined) break;
-    adminMemorySessions.delete(oldest);
-  }
+const COOKIE_NAME = "gs_session";
+const MAX_AGE_SECONDS = 60 * 60 * 24 * 30; // 30 jours
+
+function secret(): string {
+  return process.env.SESSION_SECRET || `gestionscolaire::${ADMIN_EMAIL}::v1`;
 }
 
-export function hashPassword(pw: string): string {
-  const salt = randomBytes(16).toString("hex");
-  const hash = scryptSync(pw, salt, 64).toString("hex");
-  return `${salt}:${hash}`;
+function sign(payload: string): string {
+  return createHmac("sha256", secret()).update(payload).digest("base64url");
 }
 
-export function verifyPassword(pw: string, stored: string): boolean {
-  const [salt, hash] = stored.split(":");
-  if (!salt || !hash) return false;
-  const candidate = scryptSync(pw, salt, 64);
-  const expected = Buffer.from(hash, "hex");
-  return candidate.length === expected.length && timingSafeEqual(candidate, expected);
+export function isAdminEmail(email: string): boolean {
+  return normalizeEmail(email) === ADMIN_EMAIL;
 }
 
-/** Principal platform administrator (server-side only — never rendered to subscribers). */
-export const PRINCIPAL_ADMIN_EMAIL = ADMIN_EMAIL;
-/** Default password for the principal administrator (overridable via ADMIN_PASSWORD). */
-export const PRINCIPAL_ADMIN_PASSWORD = ADMIN_PASSWORD;
-
-export function isPrincipalAdminEmail(email: string): boolean {
-  return email.trim().toLowerCase() === ADMIN_EMAIL;
+export function encodeSession(session: Session): string {
+  const payload = Buffer.from(JSON.stringify({ ...session, iat: Date.now() })).toString("base64url");
+  return `${payload}.${sign(payload)}`;
 }
 
-/** Synchronous in-memory check — works even when storage is empty/reset. */
-export function isPrincipalAdminInMemory(email: string): boolean {
-  return email.trim().toLowerCase() === ADMIN_EMAIL;
-}
-
-/**
- * Principal administrator authentication.
- * - The e-mail is the identity; an empty password is accepted for this account
- *   (direct e-mail sign-in, as requested).
- * - If a password is supplied it must match ADMIN_PASSWORD.
- */
-export function verifyAdmin(email: string, pw: string): boolean {
-  if (!isPrincipalAdminEmail(email)) return false;
-  if (!pw) return true;
-  const a = Buffer.from(pw);
-  const b = Buffer.from(ADMIN_PASSWORD);
-  return a.length === b.length && timingSafeEqual(a, b);
-}
-
-/** True when the e-mail belongs to the principal admin (env) or to a seeded platform admin row. */
-export async function isPlatformAdminEmail(email: string): Promise<boolean> {
-  const normalized = email.trim().toLowerCase();
-  if (isPrincipalAdminEmail(normalized)) return true;
+export function decodeSession(value: string | undefined): Session | null {
+  if (!value) return null;
+  const idx = value.lastIndexOf(".");
+  if (idx <= 0) return null;
+  const payload = value.slice(0, idx);
+  const signature = value.slice(idx + 1);
+  const expected = sign(payload);
+  const a = Buffer.from(signature);
+  const b = Buffer.from(expected);
+  if (a.length !== b.length || !timingSafeEqual(a, b)) return null;
   try {
-    const { platformAdmins } = await import("@/db/schema");
-    const rows = await db
-      .select({ email: platformAdmins.email })
-      .from(platformAdmins)
-      .where(eq(platformAdmins.email, normalized))
-      .limit(1);
-    return rows.length > 0;
-  } catch {
-    return false;
-  }
-}
-
-export function genPassword(): string {
-  return "SCL-" + randomBytes(3).toString("hex").toUpperCase();
-}
-
-export async function createSession(role: "tenant" | "admin", tenantId: string | null) {
-  const token = randomBytes(32).toString("hex");
-
-  if (role === "admin") {
-    // Instant in-memory admin session — zero database access.
-    pruneAdminSessions();
-    adminMemorySessions.set(token, Date.now() + ADMIN_TTL * 1000);
-  } else {
-    await db.insert(sessions).values({
-      token,
-      role,
-      tenantId,
-      expiresAt: new Date(Date.now() + WEEK * 1000),
-    });
-  }
-
-  const jar = await cookies();
-  jar.set(SESSION_COOKIE, token, {
-    httpOnly: true,
-    sameSite: "lax",
-    path: "/",
-    // Admin gets a browser-session cookie (no persistent maxAge) so closing the browser always clears it
-    ...(role === "admin" ? {} : { maxAge: WEEK }),
-    secure: process.env.NODE_ENV === "production",
-  });
-}
-
-export async function destroySession() {
-  const jar = await cookies();
-  const token = jar.get(SESSION_COOKIE)?.value;
-  if (token) {
-    if (adminMemorySessions.has(token)) {
-      adminMemorySessions.delete(token); // memory-only admin session: instant
-    } else {
-      try {
-        await db.delete(sessions).where(eq(sessions.token, token));
-      } catch {
-        /* tenant session row may not exist (e.g. in-memory fallback) */
-      }
+    const data = JSON.parse(Buffer.from(payload, "base64url").toString("utf8")) as Record<string, unknown>;
+    if (data.role === "admin" && typeof data.email === "string") {
+      // L'accès administrateur est réservé de manière permanente à l'e-mail de la Direction Générale.
+      if (!isAdminEmail(data.email)) return null;
+      return { role: "admin", email: ADMIN_EMAIL };
     }
+    if (data.role === "school" && typeof data.schoolId === "number") {
+      return { role: "school", email: String(data.email ?? ""), schoolId: data.schoolId };
+    }
+    return null;
+  } catch {
+    return null;
   }
-  jar.set(SESSION_COOKIE, "", { httpOnly: true, path: "/", maxAge: 0 });
-}
-
-export interface Session {
-  role: "tenant" | "admin";
-  tenantId: string | null;
-  tenant?: typeof tenants.$inferSelect;
 }
 
 export async function getSession(): Promise<Session | null> {
-  const jar = await cookies();
-  const token = jar.get(SESSION_COOKIE)?.value;
-  if (!token) return null;
-
-  // 1) In-memory administrator session — answered without any database access.
-  const adminExpiry = adminMemorySessions.get(token);
-  if (adminExpiry !== undefined) {
-    if (adminExpiry <= Date.now()) {
-      adminMemorySessions.delete(token);
-      return null;
-    }
-    return { role: "admin", tenantId: null };
-  }
-
-  // 2) Persisted tenant sessions.
-  const rows = await db
-    .select()
-    .from(sessions)
-    .leftJoin(tenants, eq(sessions.tenantId, tenants.id))
-    .where(eq(sessions.token, token))
-    .limit(1);
-  const row = rows[0];
-  if (!row) return null;
-  if (row.sessions.expiresAt.getTime() < Date.now()) {
-    await db.delete(sessions).where(eq(sessions.token, token));
-    return null;
-  }
-  if (row.sessions.role === "admin") return { role: "admin", tenantId: null };
-  const t = row.tenants;
-  if (!t || t.status !== "active") return null;
-  return { role: "tenant", tenantId: t.id, tenant: t };
+  const store = await cookies();
+  return decodeSession(store.get(COOKIE_NAME)?.value);
 }
 
-/** Tenant scope for data operations. Admin is confined to the sandbox — never a real tenant. */
-export async function tenantScope(): Promise<{ tenantId: string; role: "tenant" | "admin" } | null> {
-  const s = await getSession();
-  if (!s) return null;
-  if (s.role === "tenant" && s.tenantId) return { tenantId: s.tenantId, role: "tenant" };
-  if (s.role === "admin") {
-    const box = await db.select().from(tenants).where(eq(tenants.isSandbox, true)).limit(1);
-    if (box[0]) return { tenantId: box[0].id, role: "admin" };
+export async function setSession(session: Session): Promise<void> {
+  const store = await cookies();
+  store.set(COOKIE_NAME, encodeSession(session), {
+    httpOnly: true,
+    sameSite: "lax",
+    secure: process.env.VERCEL === "1" || process.env.COOKIE_SECURE === "true",
+    path: "/",
+    maxAge: MAX_AGE_SECONDS,
+  });
+}
+
+export async function clearSession(): Promise<void> {
+  const store = await cookies();
+  store.delete(COOKIE_NAME);
+}
+
+export async function requireAdmin(): Promise<Extract<Session, { role: "admin" }>> {
+  const session = await getSession();
+  if (!session) redirect("/?erreur=connexion");
+  if (session.role !== "admin") redirect(`/ecoles/${session.schoolId}`);
+  return session;
+}
+
+/** Autorise l'administrateur principal (toutes les écoles) ou l'école elle-même. */
+export async function requireSchoolAccess(schoolId: number): Promise<Session> {
+  const session = await getSession();
+  if (!session) redirect("/?erreur=connexion");
+  if (session.role === "admin") return session;
+  if (session.schoolId !== schoolId) redirect(`/ecoles/${session.schoolId}`);
+  return session;
+}
+
+/**
+ * Vérification d'accès au niveau de chaque page école (les layouts ne sont pas
+ * ré-exécutés lors des navigations client). Charge l'école ou renvoie 404.
+ */
+export async function requireSchoolPage(schoolId: number) {
+  if (!Number.isInteger(schoolId) || schoolId <= 0) notFound();
+  const session = await requireSchoolAccess(schoolId);
+  const school = await getSchoolById(schoolId);
+  if (!school) notFound();
+  if (session.role !== "admin" && school.status !== "actif") {
+    redirect(`/?erreur=${encodeURIComponent("Votre abonnement n'est pas actif (en attente de validation, suspendu ou retiré). Contactez la Direction Générale.")}`);
   }
-  return null;
+  return { session, school };
 }

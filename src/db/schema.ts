@@ -1,180 +1,145 @@
 import {
-  pgTable,
-  uuid,
-  text,
-  integer,
   boolean,
+  index,
+  integer,
+  numeric,
+  pgTable,
+  serial,
+  text,
   timestamp,
-  date,
-  doublePrecision,
-  unique,
+  uniqueIndex,
 } from "drizzle-orm/pg-core";
 
-/* ── Tenants (écoles abonnées) ─────────────────────────────── */
-export const tenants = pgTable("tenants", {
-  id: uuid("id").defaultRandom().primaryKey(),
-  name: text("name").notNull(),
-  email: text("email").notNull().unique(),
-  phone: text("phone").notNull().default(""),
-  passwordHash: text("password_hash").notNull(),
-  status: text("status").notNull().default("active"), // active | suspended | revoked
-  plan: text("plan").notNull().default("monthly"), // monthly | quarterly | annual
-  structure: text("structure").notNull().default("all"), // legacy summary: all | nursery | primary | secondary
-  structures: text("structures").notNull().default("nursery,primary,secondary"), // comma-separated paid structures
-  createdByAdmin: boolean("created_by_admin").notNull().default(false),
-  isSandbox: boolean("is_sandbox").notNull().default(false),
-  seenVersion: text("seen_version").notNull().default(""),
-  subscriptionEndsAt: timestamp("subscription_ends_at", { withTimezone: true }),
-  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
-});
+export type Level = "maternel" | "primaire" | "secondaire";
+export type SubscriberStatus = "en_attente" | "actif" | "suspendu" | "retire";
+export type PlanCode = "mensuel" | "trimestriel" | "annuel";
+export type Gender = "M" | "F";
+export type StudentStatus = "actif" | "inactif";
 
-export const sessions = pgTable("sessions", {
-  token: text("token").primaryKey(),
-  role: text("role").notNull(), // tenant | admin
-  tenantId: uuid("tenant_id").references(() => tenants.id, { onDelete: "cascade" }),
-  expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
-  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
-});
+/**
+ * Écoles abonnées (Maternelle / Primaire / Secondaire).
+ * L'administrateur principal n'est pas stocké ici : il est reconnu par son e-mail.
+ */
+export const subscribers = pgTable(
+  "scolaria_subscribers",
+  {
+    id: serial("id").primaryKey(),
+    name: text("name").notNull(),
+    code: text("code").notNull(),
+    email: text("email").notNull(),
+    phone: text("phone"),
+    address: text("address"),
+    directorName: text("director_name"),
+    countryCode: text("country_code").notNull().default("237"),
+    hasMaternel: boolean("has_maternel").notNull().default(false),
+    hasPrimaire: boolean("has_primaire").notNull().default(false),
+    hasSecondaire: boolean("has_secondaire").notNull().default(false),
+    status: text("status").$type<SubscriberStatus>().notNull().default("actif"),
+    subscriptionEnd: text("subscription_end"),
+    notes: text("notes"),
+    // Espace abonné : création de compte, formule, paiement mobile (colonnes additives)
+    passwordHash: text("password_hash"),
+    plan: text("plan").$type<PlanCode>(),
+    planMonths: integer("plan_months"),
+    amountDue: integer("amount_due"),
+    paymentMethod: text("payment_method"),
+    paymentReference: text("payment_reference"),
+    requestToken: text("request_token"),
+    subscriptionStart: text("subscription_start"),
+    validatedAt: timestamp("validated_at"),
+    createdAt: timestamp("created_at").notNull().defaultNow(),
+    updatedAt: timestamp("updated_at").notNull().defaultNow(),
+  },
+  (t) => [
+    uniqueIndex("subscribers_email_idx").on(t.email),
+    uniqueIndex("subscribers_code_idx").on(t.code),
+    uniqueIndex("subscribers_request_token_idx").on(t.requestToken),
+  ],
+);
 
-/* ── Structure pédagogique ─────────────────────────────────── */
 export const classes = pgTable(
-  "classes",
+  "scolaria_classes",
   {
-    id: uuid("id").defaultRandom().primaryKey(),
-    tenantId: uuid("tenant_id").notNull().references(() => tenants.id, { onDelete: "cascade" }),
-    block: text("block").notNull(), // nursery | primary | secondary
-    levelCode: text("level_code").notNull(),
-    variant: text("variant").notNull().default("general"), // general | technical | bilingual
-    tuition: integer("tuition").notNull().default(25000),
-    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    id: serial("id").primaryKey(),
+    schoolId: integer("school_id")
+      .notNull()
+      .references(() => subscribers.id, { onDelete: "cascade" }),
+    level: text("level").$type<Level>().notNull(),
+    name: text("name").notNull(),
+    sortOrder: integer("sort_order").notNull().default(0),
+    createdAt: timestamp("created_at").notNull().defaultNow(),
   },
-  (t) => [unique("classes_tenant_level_variant").on(t.tenantId, t.levelCode, t.variant)]
+  (t) => [index("classes_school_idx").on(t.schoolId)],
 );
 
+/**
+ * Élèves. Le numéro officiel est attribué automatiquement à l'enregistrement
+ * (séquence par établissement) : la "Liste des numéros officiels" est donc
+ * toujours synchronisée avec la liste des élèves.
+ */
 export const students = pgTable(
-  "students",
+  "scolaria_students",
   {
-    id: uuid("id").defaultRandom().primaryKey(),
-    tenantId: uuid("tenant_id").notNull().references(() => tenants.id, { onDelete: "cascade" }),
-    classId: uuid("class_id").notNull().references(() => classes.id, { onDelete: "cascade" }),
-    matricule: text("matricule").notNull(),
+    id: serial("id").primaryKey(),
+    schoolId: integer("school_id")
+      .notNull()
+      .references(() => subscribers.id, { onDelete: "cascade" }),
+    classId: integer("class_id").references(() => classes.id, { onDelete: "set null" }),
+    level: text("level").$type<Level>().notNull(),
+    officialSeq: integer("official_seq").notNull(),
+    officialNumber: text("official_number").notNull(),
     lastName: text("last_name").notNull(),
+    middleName: text("middle_name"),
     firstName: text("first_name").notNull(),
-    sex: text("sex").notNull(), // M | F
-    birthDate: date("birth_date").notNull(),
-    birthPlace: text("birth_place").notNull().default(""),
-    fatherName: text("father_name").notNull().default(""),
-    motherName: text("mother_name").notNull().default(""),
-    whatsapp: text("whatsapp").notNull().default(""),
-    enrolledAt: date("enrolled_at").notNull(),
-    tuitionTotal: integer("tuition_total").notNull().default(25000),
-    paid1: integer("paid1").notNull().default(0),
-    paid2: integer("paid2").notNull().default(0),
-    archived: boolean("archived").notNull().default(false),
-    archiveReason: text("archive_reason").notNull().default(""),
-    archivedAt: timestamp("archived_at", { withTimezone: true }),
-    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    gender: text("gender").$type<Gender>().notNull().default("M"),
+    birthDate: text("birth_date"),
+    birthPlace: text("birth_place"),
+    parentName: text("parent_name"),
+    parentPhone: text("parent_phone"),
+    address: text("address"),
+    status: text("status").$type<StudentStatus>().notNull().default("actif"),
+    createdAt: timestamp("created_at").notNull().defaultNow(),
+    updatedAt: timestamp("updated_at").notNull().defaultNow(),
   },
-  (t) => [unique("students_tenant_matricule").on(t.tenantId, t.matricule)]
+  (t) => [
+    uniqueIndex("students_official_number_idx").on(t.schoolId, t.officialNumber),
+    uniqueIndex("students_school_seq_idx").on(t.schoolId, t.officialSeq),
+    index("students_class_idx").on(t.classId),
+    index("students_school_idx").on(t.schoolId),
+  ],
 );
-
-export const staff = pgTable("staff", {
-  id: uuid("id").defaultRandom().primaryKey(),
-  tenantId: uuid("tenant_id").notNull().references(() => tenants.id, { onDelete: "cascade" }),
-  fullName: text("full_name").notNull(),
-  role: text("role").notNull().default("teacher"), // director | teacher | bursar | secretary | supervisor
-  block: text("block").notNull().default("primary"), // nursery | primary | secondary | all
-  classId: uuid("class_id").references(() => classes.id, { onDelete: "set null" }),
-  phone: text("phone").notNull().default(""),
-  email: text("email").notNull().default(""),
-  salary: integer("salary").notNull().default(0),
-  status: text("status").notNull().default("active"), // active | on_leave
-  hiredAt: date("hired_at").notNull(),
-  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
-});
-
-export const waLogs = pgTable("wa_logs", {
-  id: uuid("id").defaultRandom().primaryKey(),
-  tenantId: uuid("tenant_id").notNull().references(() => tenants.id, { onDelete: "cascade" }),
-  studentId: uuid("student_id"),
-  recipientName: text("recipient_name").notNull(),
-  phone: text("phone").notNull(),
-  kind: text("kind").notNull().default("custom"), // enroll | reminder | bulletin | custom
-  message: text("message").notNull(),
-  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
-});
 
 export const payments = pgTable(
-  "payments",
+  "scolaria_payments",
   {
-    id: uuid("id").defaultRandom().primaryKey(),
-    tenantId: uuid("tenant_id").notNull().references(() => tenants.id, { onDelete: "cascade" }),
-    studentId: uuid("student_id").notNull().references(() => students.id, { onDelete: "cascade" }),
-    receiptNo: text("receipt_no").notNull(),
-    amount: integer("amount").notNull(),
-    tranche: integer("tranche").notNull().default(1),
-    method: text("method").notNull().default("cash"), // cash | orange | momo
-    paidAt: date("paid_at").notNull(),
-    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    id: serial("id").primaryKey(),
+    schoolId: integer("school_id")
+      .notNull()
+      .references(() => subscribers.id, { onDelete: "cascade" }),
+    studentId: integer("student_id")
+      .notNull()
+      .references(() => students.id, { onDelete: "cascade" }),
+    receiptSeq: integer("receipt_seq").notNull(),
+    receiptNumber: text("receipt_number").notNull(),
+    token: text("token").notNull(),
+    amount: numeric("amount", { precision: 14, scale: 2 }).notNull(),
+    currency: text("currency").notNull().default("XAF"),
+    motif: text("motif").notNull(),
+    period: text("period"),
+    payerName: text("payer_name"),
+    method: text("method").notNull().default("Espèces"),
+    paidAt: text("paid_at").notNull(),
+    note: text("note"),
+    createdAt: timestamp("created_at").notNull().defaultNow(),
   },
-  (t) => [unique("payments_tenant_receipt").on(t.tenantId, t.receiptNo)]
+  (t) => [
+    uniqueIndex("payments_token_idx").on(t.token),
+    uniqueIndex("payments_school_receipt_idx").on(t.schoolId, t.receiptSeq),
+    index("payments_student_idx").on(t.studentId),
+  ],
 );
 
-export const subjects = pgTable("subjects", {
-  id: uuid("id").defaultRandom().primaryKey(),
-  tenantId: uuid("tenant_id").notNull().references(() => tenants.id, { onDelete: "cascade" }),
-  classId: uuid("class_id").notNull().references(() => classes.id, { onDelete: "cascade" }),
-  nameFr: text("name_fr").notNull(),
-  nameEn: text("name_en").notNull(),
-  coefficient: integer("coefficient").notNull().default(1),
-  position: integer("position").notNull().default(0),
-  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
-});
-
-export const grades = pgTable(
-  "grades",
-  {
-    id: uuid("id").defaultRandom().primaryKey(),
-    tenantId: uuid("tenant_id").notNull().references(() => tenants.id, { onDelete: "cascade" }),
-    studentId: uuid("student_id").notNull().references(() => students.id, { onDelete: "cascade" }),
-    subjectId: uuid("subject_id").notNull().references(() => subjects.id, { onDelete: "cascade" }),
-    term: integer("term").notNull().default(1),
-    value: doublePrecision("value").notNull(),
-    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
-  },
-  (t) => [unique("grades_student_subject_term").on(t.studentId, t.subjectId, t.term)]
-);
-
-/* ── Comptes administrateurs plateforme (privés) ──────────── */
-export const platformAdmins = pgTable("platform_admins", {
-  email: text("email").primaryKey(),
-  label: text("label").notNull().default("Principal"),
-  isPrincipal: boolean("is_principal").notNull().default(true),
-  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
-});
-
-/* ── Plateforme (Super Admin) ──────────────────────────────── */
-export const updates = pgTable("updates", {
-  id: uuid("id").defaultRandom().primaryKey(),
-  version: text("version").notNull(),
-  titleFr: text("title_fr").notNull(),
-  titleEn: text("title_en").notNull(),
-  notesFr: text("notes_fr").notNull().default(""),
-  notesEn: text("notes_en").notNull().default(""),
-  status: text("status").notNull().default("deployed"), // draft | deployed
-  deployedAt: timestamp("deployed_at", { withTimezone: true }),
-  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
-});
-
-export const subRequests = pgTable("sub_requests", {
-  id: uuid("id").defaultRandom().primaryKey(),
-  schoolName: text("school_name").notNull(),
-  phone: text("phone").notNull(),
-  email: text("email").notNull(),
-  plan: text("plan").notNull().default("monthly"),
-  structure: text("structure").notNull().default("all"),
-  paymentMethod: text("payment_method").notNull().default("orange"), // orange | momo
-  paymentRef: text("payment_ref").notNull().default(""),
-  status: text("status").notNull().default("pending"), // pending | approved | rejected
-  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
-});
+export type Subscriber = typeof subscribers.$inferSelect;
+export type SchoolClass = typeof classes.$inferSelect;
+export type Student = typeof students.$inferSelect;
+export type Payment = typeof payments.$inferSelect;
