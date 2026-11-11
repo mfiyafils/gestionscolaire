@@ -80,6 +80,36 @@ export function StatCard({
   );
 }
 
+/** Tons du composant Badge — identiques au module UI d'origine. */
+const BADGE_TONES = {
+  green: "bg-ok/12 text-ok",
+  amber: "bg-amber/15 text-amber-2",
+  red: "bg-danger/10 text-danger",
+  blue: "bg-cblue/10 text-cblue",
+  magenta: "bg-magenta/10 text-magenta",
+  board: "bg-board/10 text-board",
+  gray: "bg-inkmut/10 text-inkmut",
+} as const;
+
+export type BadgeTone = keyof typeof BADGE_TONES;
+
+/**
+ * Pastille de statut. Même signature que le composant d'origine :
+ * <Badge tone="green">Actif</Badge> — ton par défaut "board", ton inconnu → "board".
+ */
+export function Badge({
+  tone = "board",
+  children,
+  className,
+}: {
+  tone?: BadgeTone | (string & Record<never, never>);
+  children?: ReactNode;
+  className?: string;
+}) {
+  const toneClass = (BADGE_TONES as Record<string, string>)[tone] ?? BADGE_TONES.board;
+  return <span className={cn("chip", toneClass, className)}>{children}</span>;
+}
+
 export function LevelBadge({ level }: { level: Level }) {
   const info = LEVEL_INFO[level];
   return (
