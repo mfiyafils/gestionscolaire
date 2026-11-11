@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import type { ReactNode } from "react";
 import { ensureSchema } from "@/db/ensure";
+import { ToastHost } from "@/components/ui";
 import { APP_BRAND, APP_NAME } from "@/lib/constants";
 import "./globals.css";
 
@@ -25,7 +26,10 @@ export default async function RootLayout({ children }: { children: ReactNode }) 
         <link rel="preconnect" href="https://fonts.gstatic.com" crossOrigin="anonymous" />
         <link href={GOOGLE_FONTS} rel="stylesheet" />
       </head>
-      <body className="min-h-screen antialiased">{children}</body>
+      <body className="min-h-screen antialiased">
+        {children}
+        <ToastHost />
+      </body>
     </html>
   );
 }
